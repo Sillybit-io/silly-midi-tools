@@ -11,17 +11,46 @@ struct ModelStoreTests {
         #expect(sums["muscriptor-large"] == "35a750fb1ab1e77195cdc2c0b9b4aeea2f4d59f11f729f02af9920c4854ef72e")
         #expect(sums["piano-onnx"] == "6ec4f07640837df2fcd2cede9c540865acff341def93fbd6432548dee169195a")
         #expect(sums["drums-adtof"]?.count == 64 && sums["drums-oaf"]?.count == 64)
+        #expect(sums["beat-this"] == "ab31b5a815e2d90c6cb523e33f0ce45590fdcf80c4181a8115394d94633be14a")
         let urls = ModelCatalog.entries.compactMap(\.downloadURL)
-        #expect(urls.count == 7)
+        #expect(urls.count == 8)
         #expect(urls.allSatisfy { !$0.absoluteString.contains("/main/") })
         let muscriptor = ModelCatalog.entries.filter { $0.engine == .muscriptor }.compactMap(\.downloadURL)
         #expect(muscriptor.count == 3 && muscriptor.allSatisfy { $0.absoluteString.contains("d7045f94e8b19427f4ff9542975035e66596e51c") })
-        for id in ["drums-adtof", "drums-oaf"] {
+        for id in ["drums-adtof", "drums-oaf", "beat-this"] {
             let revision = ModelCatalog.entry(id: id)?.revision ?? ""
             #expect(revision.count == 40 && revision.allSatisfy(\.isHexDigit), "\(id) must be pinned to a commit")
         }
         #expect(ModelCatalog.entries.first { $0.id == "piano-onnx" }?.downloadURL?.absoluteString
             == "https://huggingface.co/LanOss/mobimml-piano-transcription/resolve/7dff58faf160d4c0bf13be48e30e614faecdba72/piano_transcription.onnx")
+    }
+
+    @Test func beatThisIsPinnedToThePublishedCommit() throws {
+        let entry = try #require(ModelCatalog.entry(id: ModelCatalog.beatThisID))
+        #expect(entry.revision == "92842057ebb781a31fcf0d638f04a098fb887313")
+        #expect(entry.byteSize == 81_837_133)
+        #expect(entry.downloadURL?.absoluteString
+            == "https://huggingface.co/thebluescreen/beat-this-onnx/resolve/92842057ebb781a31fcf0d638f04a098fb887313/beat_this.onnx")
+        #expect(!entry.transcribes && entry.exportNotice.isEmpty && entry.access == .open)
+        #expect(ModelCatalog.entries.filter { !$0.transcribes }.contains { $0.id == entry.id }, "listed under Helpers")
+        #expect(entry.sizeText == "82 MB", "the size comes from the pinned byte count, not a typed-in figure")
+    }
+
+    /// Downloads the published file through the app's own store and checks it, as a user's first run would.
+    /// It moves 82 MB, so it runs only with SILLY_MIDI_NETWORK_TESTS=1 (pass TEST_RUNNER_SILLY_MIDI_NETWORK_TESTS=1 to xcodebuild).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["SILLY_MIDI_NETWORK_TESTS"] == "1"))
+    @MainActor func beatThisDownloadsAndVerifiesFromItsPinnedURL() async throws {
+        let entry = try #require(ModelCatalog.entry(id: ModelCatalog.beatThisID))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("beat-this-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ModelStore(directory: directory)
+        #expect(store.state(for: entry) == .notInstalled)
+        await store.install(entry)
+        #expect(store.state(for: entry) == .installed, "\(store.state(for: entry))")
+        let url = try #require(store.installedURL(for: entry))
+        let data = try Data(contentsOf: url)
+        #expect(Int64(data.count) == entry.byteSize)
+        #expect(SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() == entry.sha256)
     }
 
     @Test func verifyAcceptsGoodAndRejectsCorruptFile() async throws {

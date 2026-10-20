@@ -1,0 +1,206 @@
+{
+  "upstream_commit": "b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c",
+  "checkpoint_sha256": "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
+  "versions": {
+    "python": "3.11.16",
+    "torch": "2.2.2",
+    "torchaudio": "2.2.2",
+    "numpy": "1.26.4",
+    "onnx": "1.16.2",
+    "onnxruntime": "1.19.2",
+    "einops": "0.8.1",
+    "rotary_embedding_torch": "0.8.9",
+    "soxr": "1.0.0",
+    "soundfile": "0.13.1"
+  },
+  "inputs": [
+    {
+      "name": "waveform",
+      "type": "tensor(float)",
+      "shape": [
+        1,
+        "samples"
+      ]
+    },
+    {
+      "name": "pad_frames",
+      "type": "tensor(int64)",
+      "shape": [
+        2
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "beat",
+      "type": "tensor(float)",
+      "shape": [
+        1,
+        "frames"
+      ]
+    },
+    {
+      "name": "downbeat",
+      "type": "tensor(float)",
+      "shape": [
+        1,
+        "frames"
+      ]
+    }
+  ],
+  "fixtures": {
+    "short3": {
+      "samples": 66150,
+      "frames": 151,
+      "chunk_starts": [
+        -6
+      ],
+      "chunks": [
+        {
+          "start": -6,
+          "nonzero_frame_range": [
+            0,
+            151
+          ],
+          "left_zero_frames": 6,
+          "right_zero_frames": 6,
+          "context_samples": 67174,
+          "transformer_frames": 163,
+          "mel_max_abs_diff": 2.7418136596679688e-06,
+          "beat_max_abs_diff": 1.5735626220703125e-05,
+          "downbeat_max_abs_diff": 2.09808349609375e-05
+        }
+      ],
+      "mel_max_abs_diff": 2.7418136596679688e-06,
+      "aggregate_max_abs_diff": 2.09808349609375e-05,
+      "beat_count": 6,
+      "downbeat_count": 3
+    },
+    "short10": {
+      "samples": 220500,
+      "frames": 501,
+      "chunk_starts": [
+        -6
+      ],
+      "chunks": [
+        {
+          "start": -6,
+          "nonzero_frame_range": [
+            0,
+            501
+          ],
+          "left_zero_frames": 6,
+          "right_zero_frames": 6,
+          "context_samples": 221524,
+          "transformer_frames": 513,
+          "mel_max_abs_diff": 3.6954879760742188e-06,
+          "beat_max_abs_diff": 2.8848648071289062e-05,
+          "downbeat_max_abs_diff": 2.6464462280273438e-05
+        }
+      ],
+      "mel_max_abs_diff": 3.6954879760742188e-06,
+      "aggregate_max_abs_diff": 2.8848648071289062e-05,
+      "beat_count": 20,
+      "downbeat_count": 5
+    },
+    "full30": {
+      "samples": 661500,
+      "frames": 1501,
+      "chunk_starts": [
+        -6,
+        7
+      ],
+      "chunks": [
+        {
+          "start": -6,
+          "nonzero_frame_range": [
+            0,
+            1494
+          ],
+          "left_zero_frames": 6,
+          "right_zero_frames": 0,
+          "context_samples": 659437,
+          "transformer_frames": 1500,
+          "mel_max_abs_diff": 4.76837158203125e-06,
+          "beat_max_abs_diff": 4.0531158447265625e-05,
+          "downbeat_max_abs_diff": 4.076957702636719e-05
+        },
+        {
+          "start": 7,
+          "nonzero_frame_range": [
+            7,
+            1501
+          ],
+          "left_zero_frames": 0,
+          "right_zero_frames": 6,
+          "context_samples": 659437,
+          "transformer_frames": 1500,
+          "mel_max_abs_diff": 4.76837158203125e-06,
+          "beat_max_abs_diff": 5.269050598144531e-05,
+          "downbeat_max_abs_diff": 5.173683166503906e-05
+        }
+      ],
+      "mel_max_abs_diff": 4.76837158203125e-06,
+      "aggregate_max_abs_diff": 4.076957702636719e-05,
+      "beat_count": 60,
+      "downbeat_count": 26
+    },
+    "seam45": {
+      "samples": 992250,
+      "frames": 2251,
+      "chunk_starts": [
+        -6,
+        757
+      ],
+      "chunks": [
+        {
+          "start": -6,
+          "nonzero_frame_range": [
+            0,
+            1494
+          ],
+          "left_zero_frames": 6,
+          "right_zero_frames": 0,
+          "context_samples": 659437,
+          "transformer_frames": 1500,
+          "mel_max_abs_diff": 4.76837158203125e-06,
+          "beat_max_abs_diff": 4.220008850097656e-05,
+          "downbeat_max_abs_diff": 3.528594970703125e-05
+        },
+        {
+          "start": 757,
+          "nonzero_frame_range": [
+            757,
+            2251
+          ],
+          "left_zero_frames": 0,
+          "right_zero_frames": 6,
+          "context_samples": 659437,
+          "transformer_frames": 1500,
+          "mel_max_abs_diff": 4.76837158203125e-06,
+          "beat_max_abs_diff": 4.9114227294921875e-05,
+          "downbeat_max_abs_diff": 4.363059997558594e-05
+        }
+      ],
+      "mel_max_abs_diff": 4.76837158203125e-06,
+      "aggregate_max_abs_diff": 4.9114227294921875e-05,
+      "beat_count": 90,
+      "downbeat_count": 41
+    }
+  },
+  "postprocessing": {
+    "fps": 50,
+    "max_pool_width": 7,
+    "strict_positive_logit": true,
+    "adjacent_peak_examples": {
+      "8,9": [
+        8.5
+      ],
+      "8,10": [
+        8,
+        10
+      ]
+    },
+    "downbeats": "nearest beat, then unique"
+  }
+}

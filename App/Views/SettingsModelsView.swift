@@ -44,7 +44,9 @@ struct SettingsModelsView: View {
         let drumModels = ModelCatalog.entries.filter(\.isDrumModel).map(\.displayName).joined(separator: " or ")
         return "Helpers aren\u{2019}t picked as the model. To use the drum separator, open an audio file, choose \(drumModels) "
             + "as the model, then turn on Separate drums first in the inspector\u{2019}s Drums section. "
-            + "If the separator isn\u{2019}t downloaded yet, the next run downloads it first."
+            + "If the separator isn\u{2019}t downloaded yet, the next run downloads it first. "
+            + "The beat tracker works in the Tempo section of the Audio inspector: once it is downloaded, Detect tempo from audio "
+            + "also finds downbeats and suggests a time-signature map, which you apply yourself."
     }
 
     private func row(_ entry: ModelEntry) -> some View {

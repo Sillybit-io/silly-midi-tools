@@ -5,7 +5,7 @@ enum ThirdPartyComponents {
     static let names = [
         "MuScriptor weights", "GGUF conversion", "muscriptor.cpp", "ggml", "pffft", "Basic Pitch",
         "swift-midi-file", "ONNX Runtime", "Piano transcription model", "Piano transcription post-processing", "Drum transcription model (ADTOF)",
-        "Drum transcription model (Onsets and Frames)", "Drum separator model (HT-Demucs)", "Jon Worthy and the Bends excerpt", "Apple General MIDI soundbank",
+        "Drum transcription model (Onsets and Frames)", "Drum separator model (HT-Demucs)", "Beat tracking model (Beat This!)", "Jon Worthy and the Bends excerpt", "Apple General MIDI soundbank",
     ]
 
     static func noticesText(bundle: Bundle = Bundle(for: ModelStoreProbe.self)) -> String {
@@ -70,6 +70,8 @@ extension ThirdPartyComponents {
                  licence: "Apache-2.0", sections: ["Drum transcription model (Onsets and Frames)"]),
             Spec(id: "htdemucs", name: "Drum separator (HT-Demucs)", credit: "Rouard, Massa and Defossez (Meta) · ONNX export by StemSplit.io",
                  licence: "MIT", sections: ["Drum separator model (HT-Demucs)"]),
+            Spec(id: "beatthis", name: "Beat tracker (Beat This!)", credit: "Francesco Foscarin, Jan Schl\u{00FC}ter and Gerhard Widmer (JKU Linz) \u{00B7} ONNX conversion for this app",
+                 licence: "MIT", sections: ["Beat tracking model (Beat This!)"]),
             Spec(id: "basicpitch", name: "Basic Pitch", credit: "Spotify", licence: "Apache-2.0", sections: ["Basic Pitch"]),
         ]),
         ("Libraries", [

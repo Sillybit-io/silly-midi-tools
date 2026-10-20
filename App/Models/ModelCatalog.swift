@@ -32,7 +32,7 @@ enum AccessRequirement: Sendable {
 }
 
 struct ModelEntry: Identifiable, Hashable, Sendable {
-    enum Engine: Sendable { case muscriptor, basicPitch, pianoOnnx, drumsAdtof, drumsOaf, handPercussion, separator }
+    enum Engine: Sendable { case muscriptor, basicPitch, pianoOnnx, drumsAdtof, drumsOaf, handPercussion, separator, beatThis }
 
     let id: String
     let displayName: String
@@ -63,7 +63,7 @@ struct ModelEntry: Identifiable, Hashable, Sendable {
         case .basicPitch: "Transcribed with Basic Pitch by Spotify (Apache-2.0)."
         case .pianoOnnx: "Transcribed with the high-resolution piano transcription model by Kong et al. (CC BY 4.0)."
         case .drumsAdtof: "Transcribed with ADTOF by Zehren, Alunno and Bientinesi (CC BY-NC-SA 4.0, non-commercial use only)."
-        case .separator: ""
+        case .separator, .beatThis: ""
         case .drumsOaf: "Transcribed with Onsets and Frames Drums by Callender, Hawthorne and Engel, Magenta (Apache-2.0)."
         case .handPercussion: "Transcribed with the hand percussion detector built into Silly MIDI Tools (Apache-2.0). Low strokes are General MIDI Low Conga, high strokes Open Hi Conga."
         }
@@ -74,7 +74,7 @@ struct ModelEntry: Identifiable, Hashable, Sendable {
     /// True for the models that report no velocity, so the app can estimate it from the audio's loudness.
     var canEstimateVelocity: Bool { engine == .muscriptor || engine == .drumsAdtof || engine == .handPercussion }
     /// False for helper models, which are downloaded and listed but never picked to transcribe with.
-    var transcribes: Bool { engine != .separator }
+    var transcribes: Bool { engine != .separator && engine != .beatThis }
     var isDrumModel: Bool { engine == .drumsAdtof || engine == .drumsOaf }
     /// True when a licence sheet comes before the download.
     var requiresAcceptance: Bool { access != .open }
@@ -183,6 +183,25 @@ enum ModelCatalog {
         attribution: "Optional helper: isolates the drums before a drum model listens. Rouard, Massa and Defossez (Meta); ONNX export by StemSplit.io",
         licenseTexts: [LicenseText(resource: "MIT", ext: "txt"), LicenseText(resource: "HTDemucsNotice", ext: "md")])
 
+    static let beatThisID = "beat-this"
+
+    /// Beat This! is hosted on the maintainer's Hugging Face account. It is listed only once `scripts/publish-beat-this.sh`
+    /// has uploaded it and rewritten the lines marked `beat-this-models` below, so no download is offered that does not exist.
+    private static let beatThisPublished = true // beat-this-models:published
+    private static let beatThisOwner = "thebluescreen" // beat-this-models:owner
+    private static let beatThisRevision = "92842057ebb781a31fcf0d638f04a098fb887313" // beat-this-models:revision
+
+    private static let beatThis = ModelEntry(
+        id: beatThisID, displayName: "Beat tracker (Beat This!)", engine: .beatThis,
+        mirrorRepo: "\(beatThisOwner)/beat-this-onnx", revision: beatThisRevision, remotePath: "beat_this.onnx",
+        byteSize: 81_837_133, // beat-this-models:size
+        sha256: "ab31b5a815e2d90c6cb523e33f0ce45590fdcf80c4181a8115394d94633be14a", // beat-this-models:sha
+        authorsRepo: nil, access: .open, statements: [],
+        homepage: URL(string: "https://github.com/CPJKU/beat_this"),
+        licenseName: "MIT", licenseKind: .permissive,
+        attribution: "Optional helper: finds beats and downbeats for tempo and meter suggestions. Foscarin, Schl\u{00FC}ter and Widmer (JKU Linz); ONNX conversion for this app",
+        licenseTexts: [LicenseText(resource: "MIT-BeatThis", ext: "txt"), LicenseText(resource: "BeatThisNotice", ext: "md")])
+
     static let entries: [ModelEntry] = [
         muscriptor("small", bytes: 209_425_152, kvCache: 218_000_000, sha: "925f55af65a20ebc4f8b45ceaf095a12b72493d436cb112623cd0041a1af23d4"),
         muscriptor("medium", bytes: 618_442_496, kvCache: 499_000_000, sha: "3850cc9e5b436b17a09bd25b8f2615cb3366ab96a71e7b50f73a793a917fdf03"),
@@ -197,7 +216,7 @@ enum ModelCatalog {
         drumsOaf,
         handPercussion,
         separator,
-    ]
+    ] + (beatThisPublished ? [beatThis] : [])
 
     static func entry(id: String?) -> ModelEntry? {
         guard let id else { return nil }

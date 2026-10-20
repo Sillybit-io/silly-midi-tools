@@ -82,6 +82,7 @@ struct HandoffStringsTests {
     @Test func settingsSaysWhereTheDrumSeparatorIsSwitchedOn() {
         #expect(SettingsModelsView.helperUsage.contains("choose Drums (ADTOF) or Drums (OaF, Magenta) as the model"))
         #expect(SettingsModelsView.helperUsage.contains("turn on Separate drums first in the inspector\u{2019}s Drums section"))
+        #expect(SettingsModelsView.helperUsage.contains("Tempo section of the Audio inspector"))
     }
 }
 

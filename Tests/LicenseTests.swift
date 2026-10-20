@@ -21,6 +21,16 @@ struct LicenseTests {
         }
     }
 
+    @Test func beatThisLicenceAndNoticeAreBundledWithTheirOwnCopyright() throws {
+        let bundle = Bundle(for: ModelStoreProbe.self)
+        let licence = try String(contentsOf: #require(bundle.url(forResource: "MIT-BeatThis", withExtension: "txt")), encoding: .utf8)
+        #expect(licence.contains("Permission is hereby granted"))
+        #expect(licence.contains("Institute of Computational Perception, JKU Linz"))
+        let notice = try String(contentsOf: #require(bundle.url(forResource: "BeatThisNotice", withExtension: "md")), encoding: .utf8)
+        #expect(notice.contains("Foscarin") && notice.contains("b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c"))
+        #expect(ThirdPartyComponents.sections(in: ThirdPartyComponents.noticesText())["Beat tracking model (Beat This!)"]?.contains("Foscarin") == true)
+    }
+
     @Test func noticesHeadingsMatchComponents() {
         let text = ThirdPartyComponents.noticesText()
         #expect(!text.isEmpty)
