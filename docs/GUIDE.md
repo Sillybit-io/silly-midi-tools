@@ -59,9 +59,23 @@ The sidebar lists both folders and updates when files appear or disappear, inclu
 
 ## Playback and export
 
-- **Playback.** Play the notes through the built-in General MIDI sound bank, next to the original audio. Mix between the two with one slider, change the speed from 0.5x to 2x, and loop the slice. Play, Stop and Loop work on both screens, and the position shows time and bar.beat. Space plays and pauses, L toggles Loop, and clicking the ruler moves the playhead. Settings can make the roll follow the playhead. Playback needs an audio output device.
+- **Playback.** Play the notes through the built-in General MIDI sound bank, next to the original audio. Mix between the two with one slider, change the speed from 0.5x to 2x, and loop the slice. Play, Stop and Loop work on both screens, and the position shows time and bar.beat. Space plays and pauses, L toggles Loop, C toggles the click, and clicking the ruler moves the playhead. Settings can make the roll follow the playhead. Playback needs an audio output device.
 - **MIDI export.** Type 1 Standard MIDI File with one track per instrument. Drag the **Drag into your DAW** tile in the footer, next to the zoom slider, onto a track in your DAW or into Finder, or use Export (Command-E). Both leave out notes outside C1 to B6 and add the line "Exported from Silly MIDI Tools". The dragged file has no licence notice and no pitch bends. The export sheet can embed the model's licence notice, include Basic Pitch's pitch bends (written for a ±2 semitone bend range), and add the detected key to the file name, for example `Song - Eb minor.mid`.
 - **Licences in the app.** The About window lists every third-party component and its licence text.
+
+### Tempo and the click
+
+- **You set the tempo and time signature.** A new recording starts from Settings, General, which holds 120 BPM in 4/4 until you change it. The Audio inspector's **Tempo** section and the MIDI editor's inspector have the same fields: the tempo in quarter notes per minute (20 to 300, two decimals), the beats per bar (1 to 32) and the beat note (1, 2, 4, 8, 16 or 32). A value outside a range is clamped, not refused. The beat note is always your choice; no model decides it. 120 BPM in 6/8 is 0.25 s per eighth note and a 1.5 s bar.
+- **Meter changes.** **Add meter change** adds a change eight bars after the last one with the same meter; set the bar it starts at and its own beats and beat note, or remove it. Changes fall on whole bars, each is written to the file as one time-signature event, and the roll, the waveform's bar lines, the bar.beat readout and the click all follow them. Every edit is one undo step: in the editor the file shows Edited until you save, and on the Audio screen Command-Z and Shift-Command-Z undo and redo tempo, meter and **Use** actions.
+- **The notes never move.** Changing the tempo or the meter changes the grid, the bars, the click and the file's ticks, not when a note sounds. Notes keep their times in seconds, so they stay in time with the audio whatever the grid says.
+- **After a run.** Changing the tempo or meter after a run rewrites that run's saved version in place, with the same version number, only while the file is still exactly what the app wrote. A file you edited, or that a DAW or another app changed, is left alone and the footer says the saved file was not updated. If the first save failed, **Try Saving Again** saves it with the new tempo.
+- **Bar 1 is the start of the slice.** If you move the slice start after a run, by hand or with **Use map** or **Start slice at first beat**, the notes no longer line up with the audio: they are hidden, silent and left out of export, and the footer says to transcribe again. The version already saved is not touched, and moving the slice back doesn't bring the old notes back; press **Transcribe Again**. A beat too near the end of the slice can't become bar 1, because the slice stays at least 0.5 s long: the app says so and changes nothing.
+- **Click.** The Click button in the transport, Controls, Click, or the C key plays a woodblock on every beat, higher on beat 1 of each bar. It follows the meter changes, runs before any notes exist, and doesn't change how the notes play.
+- **Tempo from notes.** After each run on the Audio screen, and after each edit in the editor, the inspector ranks up to three tempos by how well the notes fall on a sixteenth-note grid, and marks half and double time. With fewer than eight separate note onsets, or when nothing fits, it says **No clear pulse**.
+- **Tempo from audio.** **Detect from audio** works on the selected slice. With the Beat This! helper downloaded (Settings, Models, Helpers, 82 MB, offered as a download button in the Tempo section) it finds beats and downbeats, draws the beats on the waveform, says whether the tempo is steady or varies, and suggests a tempo and a meter map from the downbeats. Without it, or with **Quick estimate**, a quick estimate of one tempo and its beats comes from the audio's onsets. The detected rate counts pulses in your beat note, so with an eighth-note beat, 120 pulses per minute is offered as 60 quarter-note BPM, and the bar lasts as long as the beats it was measured from. **Meter unclear** means the downbeats don't give a steady count, and no map is offered.
+- **Check alignment.** After a run, **Check alignment** says what share of the notes sit on an audio onset and how early or late they are. It needs a result that still matches the slice and at least eight separate note onsets, and says **No clear match** when too few notes land on an onset. It never moves a note.
+- **Use is always your decision.** **Use** on a tempo sets the BPM. **Use map** sets the BPM and the meter together and starts the slice at the first downbeat. **Start slice at first beat** moves bar 1 to the first detected beat. Each is one undo step.
+- **Import and export.** Import reads the first tempo, rounded to two decimals, and every time signature, rounded to the nearest whole bar; a file with none opens at 120 BPM in 4/4. With the waveform's **Original timeline** switch off (the default), notes start at zero, bar 1 is the start of the slice and the meter changes are counted from there. With it on, the grid starts at the beginning of the recording and the notes sit where they are in it, so the bars match the song from its first second.
 
 ## Keyboard shortcuts
 
@@ -75,7 +89,7 @@ Help, **Keyboard Shortcuts** (Command-/) lists them all. The main ones:
 | Command-1, Command-2 | Audio, MIDI editor |
 | Option-Command-I | Show or hide the inspector |
 | Command-+, Command-- | Zoom |
-| Space, L | Play or pause, Loop |
+| Space, L, C | Play or pause, Loop, Click |
 | V, D, E | Select, Draw, Erase (MIDI editor) |
 | Up and Down arrows | Transpose by a semitone (Shift: an octave) |
 | Left and Right arrows | Nudge by one snap step |
@@ -105,6 +119,7 @@ When the switch is off, nothing is written.
 - Key detection ranks likely keys; modes that share most of their notes (for example dorian and natural minor) can be close.
 - OGG files are not decoded.
 - Audio longer than 1 hour can't be opened, because the whole recording is kept in memory. Split a longer file first.
-- Export and the editor use a fixed 120 bpm, 4/4 grid. Tempo and time signature can't be edited. Importing a file converts its tempo changes into real time, and saving an edited file writes it back at 120 bpm.
+- A file holds one tempo. A song whose tempo changes has to be transcribed in sections, one slice at a time. Importing a file converts its later tempo changes into real time, and a time-signature change in the middle of a bar moves to the nearest bar line.
+- Tempo and meter suggestions are readings of the notes and the audio, not facts: half and double time are both valid for most music, and Beat This! can be unsure about the downbeats. Nothing is applied until you press Use.
 - Saving from the editor writes notes, velocities and track instruments only. Pitch bends, controllers such as sustain, and lyrics in a file you edit are not kept.
 - Importing type 2 and SMPTE-timed MIDI files is not supported.

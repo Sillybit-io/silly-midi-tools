@@ -24,6 +24,7 @@ To run the tests, replace `build` with `test` and keep `CODE_SIGN_IDENTITY=-`, a
 
 - The end-to-end piano tests need the model, which `scripts/fetch-piano-onnx.sh` downloads.
 - The end-to-end drum tests need `build/models/adtof_frame_rnn.onnx` and `oaf_drums.onnx` (from `scripts/convert-drums.sh`) and `htdemucs_ft_drums.onnx` for the separator; each skips when its file is missing.
+- The end-to-end Beat This! tests need `build/models/beat_this.onnx` (from `scripts/convert-beat-this.sh`) and skip when it is missing. The test that downloads it from the catalogue (82 MB) runs only with `TEST_RUNNER_SILLY_MIDI_NETWORK_TESTS=1` in the environment of `xcodebuild test`.
 - The end-to-end hand percussion tests read two Wikimedia Commons darbuka recordings (CC BY-SA 4.0, test input only) that `scripts/fetch-darbuka-clips.sh` downloads into `build/percussion`, and skip without them.
 
 ## Adding a model
@@ -37,6 +38,10 @@ The tests check that every entry's licence text resolves and names its licence, 
 ## The drum models
 
 The two drum models are converted from the authors' checkpoints (ADTOF's Keras checkpoint, Magenta's E-GMD TensorFlow checkpoint) to ONNX with the audio frontend inside the graph. `scripts/convert-drums.sh` rebuilds both files and the test fixtures, and asserts that each matches the authors' own pipeline (ADTOF to 2e-6, OaF to 4e-5). They are hosted at `thebluescreen/adtof-drums-onnx` and `thebluescreen/oaf-drums-onnx`, and the catalogue pins each to a revision. `scripts/publish-drum-models.sh HF_USERNAME` uploads a rebuilt pair (it needs a Hugging Face token that can write), checks the download byte for byte, and re-pins the catalogue.
+
+## The beat tracker model
+
+Beat This! is converted from the authors' `final0` checkpoint (upstream commit `b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c`, checkpoint SHA-256 `8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331`) to one ONNX file with the log-mel front end inside the graph. The graph takes the waveform around a run of spectrogram frames and the number of zero frames to pad, so it follows the reference's chunking exactly. `scripts/convert-beat-this.sh` rebuilds `build/models/beat_this.onnx` and the fixtures in `Tests/Fixtures/BeatThis`, and fails, removing the model, unless the front end and the logits match the PyTorch pipeline to 1e-4 on a short, a 10 s, a 30 s and a 45 s piece (the 30 s and 45 s pieces cover the 1500-frame chunks and their seam). It needs `uv` and network access. `scripts/publish-beat-this.sh HF_USERNAME` uploads the model to `HF_USERNAME/beat-this-onnx` (it needs a Hugging Face token that can write), downloads it back from the pinned revision, compares it byte for byte and then rewrites the lines marked `beat-this-models` in `App/Models/ModelCatalog.swift`; `--dry-run` stages the files under `build/beat-this/publish` and changes nothing. The catalogue lists Beat This! only once those lines are pinned. The published model is at `thebluescreen/beat-this-onnx`, revision `92842057ebb781a31fcf0d638f04a098fb887313`.
 
 ## Releasing
 

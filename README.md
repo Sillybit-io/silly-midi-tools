@@ -37,10 +37,10 @@ Both DAWs can turn audio into MIDI too. Live 12 Standard and Suite have three mo
 | A full band | MuScriptor writes one track per instrument | Works best on one isolated instrument (Suite can split stems first) | Notes go to one channel's piano roll (stems can be split first) |
 | Drums | Five or eight kit pieces | Kick, snare and hi-hat | No drum mode |
 | Hand drums | A detector for darbuka and similar drums | No dedicated mode | No dedicated mode |
-| Tempo | Fixed 120 BPM, 4/4 grid | Your Live set's tempo | Your project's tempo |
+| Tempo | You set the tempo and time signature (120 BPM, 4/4 to start); it suggests them from your notes and the audio, and you press Use | Your Live set's tempo | Your project's tempo |
 | Where it runs | A separate app for Apple silicon Macs that works with any DAW | Inside Live, on Mac and Windows | Inside FL Studio, on Mac and Windows |
 
-Your DAW is the better pick when the MIDI has to follow your project's tempo, when you're on Windows, or when you're releasing the music and the part would need MuScriptor or ADTOF, which are non-commercial only. Silly MIDI Tools is worth trying when your DAW's conversion gives you extra notes, especially on a full mix, a drum kit, or a hand drum.
+Your DAW is the better pick when the MIDI has to follow a tempo that changes within the song (Silly MIDI Tools writes one tempo per file), when you're on Windows, or when you're releasing the music and the part would need MuScriptor or ADTOF, which are non-commercial only. Silly MIDI Tools is worth trying when your DAW's conversion gives you extra notes, especially on a full mix, a drum kit, or a hand drum.
 
 <sub>Ableton details come from the [Live 12 manual](https://www.ableton.com/en/live-manual/12/converting-audio-to-midi/) and the [Live edition comparison](https://www.ableton.com/en/live/compare-editions/). FL Studio details come from the [Edison](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/plugins/Edison_3.htm) and [Newtone](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/plugins/Newtone.htm) manual pages and the [FL Studio edition comparison](https://www.image-line.com/fl-studio/compare-editions). Ableton and Live are trademarks of Ableton AG, and FL Studio is a trademark of Image-Line. Silly MIDI Tools isn't affiliated with either.</sub>
 
@@ -82,6 +82,7 @@ Models download the first time you use them. MuScriptor also needs a free Huggin
 - Exports Type 1 MIDI with one track per instrument.
 - Imports your own MIDI files so you can edit them too.
 - Keeps everything in one folder you choose, with `Audio` and `MIDI` inside.
+- Lets you set the file's tempo and time signature, with meter changes at any bar, plays a click against the recording, and checks your tempo against the notes and the audio.
 
 ## Install
 
@@ -100,7 +101,7 @@ You need macOS 26 or later on a Mac with Apple silicon (M1 or newer). On an Inte
 
 ## Good to know
 
-- MIDI uses a fixed 120 BPM, 4/4 grid for now, so you can't change the tempo or time signature yet.
+- Tempo and time signature are yours to set, 120 BPM in 4/4 until you change them. The app can suggest a tempo, a bar 1 and a meter from your notes and the audio, but it applies nothing until you press Use. A file holds one tempo.
 - Recordings can be up to an hour long. OGG files aren't supported.
 - Velocity from MuScriptor, ADTOF and Hand percussion is estimated from loudness.
 
