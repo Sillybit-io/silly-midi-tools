@@ -41,8 +41,6 @@ enum MIDIEditing {
     static let pitchRange = 24...95
     static let velocityRange = 1...127
     static let defaultVelocity = 100
-    @available(*, deprecated, message: "RollDrawing uses this until its grid migration")
-    static let secondsPerBar = 2.0
     /// The shortest note when the grid is off.
     static let minimumDuration = 0.03
     static let resizeEdgeWidth: CGFloat = 6

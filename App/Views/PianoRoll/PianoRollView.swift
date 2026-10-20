@@ -2,10 +2,37 @@ import SwiftUI
 
 /// Drawing shared by the read-only Audio roll and the MIDI editor. Hit testing is deliberately not here.
 enum RollDrawing {
-    /// The export grid is fixed at 120 BPM in 4/4: one bar is two seconds.
-    static let secondsPerBar = MIDIEditing.secondsPerBar
-
     private static let blackKeys: Set<Int> = [1, 3, 6, 8, 10]
+
+    struct GridLine {
+        let seconds: Double
+        let barNumber: Int?
+
+        var isBar: Bool { barNumber != nil }
+    }
+
+    static func gridLines(grid: MIDIGrid = .standard, from: Double, to: Double) -> [GridLine] {
+        guard to.isFinite, to >= 0, from.isFinite, from <= to else { return [] }
+        let start = max(0, from)
+        var lines: [GridLine] = []
+        for (index, meter) in grid.meters.enumerated() {
+            let segmentStart = grid.seconds(ofBar: meter.bar)
+            let segmentEnd = index + 1 < grid.meters.count ? grid.seconds(ofBar: grid.meters[index + 1].bar) : .infinity
+            guard segmentStart <= to, segmentEnd > start else { continue }
+            let beat = grid.segment(atSeconds: segmentStart).secondsPerBeat
+            var beatIndex = max(0, Int(((start - segmentStart) / beat).rounded(.down)))
+            while true {
+                let seconds = segmentStart + Double(beatIndex) * beat
+                if seconds > to + 1e-9 || seconds >= segmentEnd - 1e-9 { break }
+                if seconds >= start {
+                    let barNumber = beatIndex % meter.numerator == 0 ? meter.bar + beatIndex / meter.numerator + 1 : nil
+                    lines.append(GridLine(seconds: seconds, barNumber: barNumber))
+                }
+                beatIndex += 1
+            }
+        }
+        return lines
+    }
 
     static func isBlack(_ pitch: Int) -> Bool { blackKeys.contains(pitch % 12) }
 
@@ -13,16 +40,15 @@ enum RollDrawing {
         CGFloat(pitches.count) * Metric.rowH
     }
 
-    static func ruler(_ context: GraphicsContext, _ size: CGSize, _ layout: PianoRollLayout) {
-        let firstBar = max(0, Int(layout.seconds(atX: 0) / secondsPerBar))
-        let lastBar = Int(layout.seconds(atX: size.width) / secondsPerBar) + 1
-        for bar in firstBar...max(firstBar, lastBar) {
-            let x = layout.x(seconds: Double(bar) * secondsPerBar)
+    static func ruler(_ context: GraphicsContext, _ size: CGSize, _ layout: PianoRollLayout, grid: MIDIGrid = .standard) {
+        for line in gridLines(grid: grid, from: layout.seconds(atX: 0), to: layout.seconds(atX: size.width)) {
+            guard let barNumber = line.barNumber else { continue }
+            let x = layout.x(seconds: line.seconds)
             var tick = Path()
             tick.move(to: CGPoint(x: x, y: size.height * 0.45))
             tick.addLine(to: CGPoint(x: x, y: size.height))
             context.stroke(tick, with: .color(Token.gridBar), lineWidth: Metric.hairline)
-            context.draw(Text("\(bar + 1)").font(.system(size: TypeScale.caption)).foregroundStyle(Native.fgSecondary),
+            context.draw(Text("\(barNumber)").font(.system(size: TypeScale.caption)).foregroundStyle(Native.fgSecondary),
                          at: CGPoint(x: x + Metric.sp2, y: size.height * 0.3), anchor: .leading)
         }
     }
@@ -52,7 +78,8 @@ enum RollDrawing {
     }
 
     /// Lanes and beat lines. `context` is already translated so y is content-space; `top`/`bottom` bound what is visible.
-    static func grid(_ context: GraphicsContext, _ size: CGSize, _ layout: PianoRollLayout, pitches: ClosedRange<Int>, top: CGFloat, bottom: CGFloat) {
+    static func grid(_ context: GraphicsContext, _ size: CGSize, _ layout: PianoRollLayout, pitches: ClosedRange<Int>, top: CGFloat, bottom: CGFloat,
+                     grid: MIDIGrid = .standard) {
         for pitch in pitches {
             let y = layout.y(pitch: pitch)
             guard y + Metric.rowH >= top, y <= bottom else { continue }
@@ -66,15 +93,12 @@ enum RollDrawing {
                 context.stroke(line, with: .color(Token.gridBar), lineWidth: Metric.hairline)
             }
         }
-        let beat = secondsPerBar / 4
-        let firstBeat = max(0, Int(layout.seconds(atX: 0) / beat))
-        let lastBeat = Int(layout.seconds(atX: size.width) / beat) + 1
-        for index in firstBeat...max(firstBeat, lastBeat) {
-            let x = layout.x(seconds: Double(index) * beat)
+        for beatLine in gridLines(grid: grid, from: layout.seconds(atX: 0), to: layout.seconds(atX: size.width)) {
+            let x = layout.x(seconds: beatLine.seconds)
             var line = Path()
             line.move(to: CGPoint(x: x, y: top))
             line.addLine(to: CGPoint(x: x, y: bottom))
-            context.stroke(line, with: .color(index % 4 == 0 ? Token.gridBar : Token.gridBeat), lineWidth: Metric.hairline)
+            context.stroke(line, with: .color(beatLine.isBar ? Token.gridBar : Token.gridBeat), lineWidth: Metric.hairline)
         }
     }
 
@@ -99,6 +123,7 @@ struct PianoRollView: View {
     var playhead: Double?
     let hidden: Set<String>
     @Binding var pixelsPerSecond: CGFloat
+    var grid: MIDIGrid = .standard
     /// Scrolls to keep the playhead in view while it moves.
     var follows = false
     /// Called with the time under a click on the ruler.
@@ -126,7 +151,7 @@ struct PianoRollView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
                     Token.surfaceSunken.frame(width: Metric.keysW, height: Metric.rulerH)
-                    Canvas { context, size in RollDrawing.ruler(context, size, layout) }
+                    Canvas { context, size in RollDrawing.ruler(context, size, layout, grid: grid) }
                         .frame(height: Metric.rulerH).background(Token.surfaceSunken)
                         .gesture(SpatialTapGesture().onEnded { onSeek?(layout.seconds(atX: $0.location.x)) })
                         .help("Click to move the playhead")
@@ -194,7 +219,7 @@ struct PianoRollView: View {
         var context = context
         context.translateBy(x: 0, y: -yOffset)
         let top = yOffset, bottom = yOffset + size.height
-        RollDrawing.grid(context, size, layout, pitches: pitches, top: top, bottom: bottom)
+        RollDrawing.grid(context, size, layout, pitches: pitches, top: top, bottom: bottom, grid: grid)
         let visible = layout.visibleNotes(notes, from: layout.seconds(atX: 0), to: layout.seconds(atX: size.width))
         for note in visible where !hidden.contains(note.instrument) && pitches.contains(note.pitch) {
             let colour = neutralColour ? InstrumentColor.color(forFamily: "all")
