@@ -12,6 +12,9 @@ struct KeyboardShortcutsView: View {
         ("Transcribe", [
             ("\u{21A9}", "Transcribe"), ("\u{2318}.", "Cancel the run"),
         ]),
+        ("Controls", [
+            ("C", "Turn the click on or off"),
+        ]),
         ("MIDI editor", [
             ("V  D  E", "Select, Draw and Erase tools"), ("\u{2318}A", "Select all notes"), ("\u{232B}", "Delete the selected notes"),
             ("\u{2191}  \u{2193}", "Transpose by a semitone (\u{21E7} for an octave)"), ("\u{2190}  \u{2192}", "Nudge by one snap step"),

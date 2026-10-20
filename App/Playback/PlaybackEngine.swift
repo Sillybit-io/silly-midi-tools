@@ -21,18 +21,28 @@ final class PlaybackEngine {
         didSet { if let lastError, lastError != oldValue { debugLog(.playback, "Playback error: \(lastError)") } }
     }
     /// The end of the material: the slice's length, or the end of the last note. Looping wraps here.
-    var duration = 0.0
-    var loops = false
-    var loopStart = 0.0
+    var duration = 0.0 { didSet { rescheduleClick() } }
+    var loops = false { didSet { rescheduleClick() } }
+    var loopStart = 0.0 { didSet { rescheduleClick() } }
+    var grid: MIDIGrid = .standard { didSet { rescheduleClick() } }
+    var click = false { didSet { if click != oldValue { updateClick() } } }
     /// Playback pauses here while a transcription is still running.
     var limit: Double? { didSet { if let limit, waitingForLimit, position < limit { play() } } }
     var mix = 0.5 { didSet { applyMix() } }
-    var rate: Float = 1 { didSet { sequencer.rate = rate; timePitch.rate = rate } }
+    var rate: Float = 1 {
+        willSet { if isPlaying, clockStart != nil { position = currentPosition; clockStart = (position, Date()) } }
+        didSet { sequencer.rate = rate; timePitch.rate = rate; rescheduleClick() }
+    }
 
     @ObservationIgnored private let engine = AVAudioEngine()
     @ObservationIgnored private let player = AVAudioPlayerNode()
     @ObservationIgnored private let timePitch = AVAudioUnitTimePitch()
     @ObservationIgnored private let sequencer: AVAudioSequencer
+    @ObservationIgnored private let clickSampler: AVAudioUnitSampler
+    @ObservationIgnored private let clickTrack: AVMusicTrack
+    @ObservationIgnored private var clickSoundLoaded = false
+    @ObservationIgnored private var clickScheduledThrough = 0.0
+    @ObservationIgnored private(set) var originalScheduleCount = 0
     @ObservationIgnored private var groups: [String: Group] = [:]
     @ObservationIgnored private var muted: Set<String> = []
     @ObservationIgnored private var added = 0
@@ -45,8 +55,24 @@ final class PlaybackEngine {
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var clockStart: (position: Double, time: Date)?
 
+    var isSequencerRunning: Bool { sequencer.isPlaying }
+    var scheduledNoteCount: Int { added }
+
+    #if DEBUG
+    func enableOfflineTransportForTesting() throws {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
+    }
+    #endif
+
     init() {
         sequencer = AVAudioSequencer(audioEngine: engine)
+        clickSampler = AVAudioUnitSampler()
+        clickTrack = sequencer.createAndAppendTrack()
+        engine.attach(clickSampler)
+        engine.connect(clickSampler, to: engine.mainMixerNode, format: nil)
+        clickTrack.destinationAudioUnit = clickSampler
+        clickTrack.isMuted = true
         engine.attach(player)
         engine.attach(timePitch)
         engine.connect(player, to: timePitch, format: nil)
@@ -82,17 +108,31 @@ final class PlaybackEngine {
         return loops ? .wrap(to: min(max(0, loopStart), duration)) : .finish
     }
 
-    /// Bar and beat at the fixed 120 bpm in 4/4, both counted from 1: two seconds per bar, half a second per beat.
-    nonisolated static func barBeat(seconds: Double) -> (bar: Int, beat: Int) {
-        let clamped = max(0, seconds)
-        let bar = Int(clamped / 2)
-        let beat = min(3, Int((clamped - Double(bar) * 2) / 0.5))
-        return (bar + 1, beat + 1)
+    nonisolated static func barBeat(seconds: Double, grid: MIDIGrid = .standard) -> (bar: Int, beat: Int) {
+        grid.barBeat(atSeconds: seconds)
     }
 
-    nonisolated static func barBeatText(seconds: Double) -> String {
-        let value = barBeat(seconds: seconds)
+    nonisolated static func barBeatText(seconds: Double, grid: MIDIGrid = .standard) -> String {
+        let value = barBeat(seconds: seconds, grid: grid)
         return "\(value.bar).\(value.beat)"
+    }
+
+    nonisolated static func clickBeats(grid: MIDIGrid, from start: Double = 0, upTo end: Double) -> [(seconds: Double, accented: Bool)] {
+        guard end.isFinite, end >= 0 else { return [] }
+        let start = start.isFinite ? max(0, start) : 0
+        var bar = max(0, grid.barBeat(atSeconds: start).bar - 1)
+        var beats: [(seconds: Double, accented: Bool)] = []
+        while true {
+            let barStart = grid.seconds(ofBar: bar)
+            if barStart > end { break }
+            let segment = grid.segment(atSeconds: barStart)
+            for beat in 0..<segment.beatsPerBar {
+                let seconds = barStart + Double(beat) * segment.secondsPerBeat
+                if seconds >= start, seconds <= end { beats.append((seconds, beat == 0)) }
+            }
+            bar += 1
+        }
+        return beats
     }
 
     /// `m:ss.s`
@@ -129,6 +169,62 @@ final class PlaybackEngine {
     private func applyMix() {
         player.volume = Float(min(1, 2 * (1 - mix)))
         for group in groups.values { group.sampler.volume = Float(min(1, 2 * mix)) }
+    }
+
+    private func rescheduleClick(from seconds: Double? = nil) {
+        guard click else { return }
+        let start = seconds ?? (isPlaying ? currentPosition : position)
+        let horizon = max(duration, start) + 30
+        clearClickEvents()
+        clickScheduledThrough = horizon
+        for beat in Self.clickBeats(grid: grid, from: start, upTo: clickScheduledThrough) {
+            let event = AVMIDINoteEvent(channel: 9, key: beat.accented ? 76 : 77, velocity: beat.accented ? 115 : 85,
+                                        duration: Self.beats(forSeconds: min(0.1, grid.segment(atSeconds: beat.seconds).secondsPerBeat * 0.3)))
+            clickTrack.addEvent(event, at: Self.beats(forSeconds: beat.seconds))
+        }
+    }
+
+    private func clearClickEvents() {
+        guard clickScheduledThrough > 0 else { return }
+        clickTrack.clearEvents(in: AVBeatRange(start: 0, length: Self.beats(forSeconds: clickScheduledThrough + 1)))
+        clickScheduledThrough = 0
+    }
+
+    private func updateClick() {
+        if click {
+            if !clickSoundLoaded {
+                do {
+                    try clickSampler.loadSoundBankInstrument(at: Self.soundBankURL, program: 0, bankMSB: 0x78, bankLSB: 0)
+                    clickSoundLoaded = true
+                } catch {
+                    lastError = "Could not load the General MIDI sound bank: \(error.localizedDescription)"
+                }
+            }
+            clickTrack.isMuted = false
+            if isPlaying, groups.isEmpty, clockStart != nil {
+                position = currentPosition
+                sequencer.currentPositionInSeconds = position
+                clockStart = nil
+            }
+            rescheduleClick()
+            if isPlaying, groups.isEmpty, !sequencer.isPlaying {
+                do {
+                    sequencer.prepareToPlay()
+                    try sequencer.start()
+                } catch {
+                    lastError = error.localizedDescription
+                    clockStart = (position, Date())
+                }
+            }
+        } else {
+            if isPlaying, groups.isEmpty, sequencer.isPlaying {
+                position = currentPosition
+                clockStart = (position, Date())
+                sequencer.stop()
+            }
+            clickTrack.isMuted = true
+            clearClickEvents()
+        }
     }
 
     // MARK: Notes
@@ -215,10 +311,11 @@ final class PlaybackEngine {
             sequencer.currentPositionInSeconds = position
             sequencer.rate = rate
             schedulePlayer(from: position)
-            if groups.isEmpty {
+            if groups.isEmpty && !click {
                 clockStart = (position, Date())
             } else {
                 clockStart = nil
+                rescheduleClick()
                 sequencer.prepareToPlay()
                 try sequencer.start()
             }
@@ -242,6 +339,7 @@ final class PlaybackEngine {
         segment.frameLength = remaining
         segment.floatChannelData![0].update(from: original.floatChannelData![0] + Int(start), count: Int(remaining))
         player.scheduleBuffer(segment, completionHandler: nil)
+        originalScheduleCount += 1
     }
 
     private var currentPosition: Double {
@@ -275,7 +373,7 @@ final class PlaybackEngine {
         let resume = isPlaying
         if resume { pauseTransport() }
         position = max(0, duration > 0 ? min(seconds, duration) : seconds)
-        if resume { play() }
+        if resume { play() } else { rescheduleClick() }
     }
 
     private func startTicker() {
@@ -284,6 +382,7 @@ final class PlaybackEngine {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(33))
                 guard let self, self.isPlaying else { return }
+                if self.click, self.currentPosition > self.clickScheduledThrough - 5 { self.rescheduleClick() }
                 if !self.handleTick(self.currentPosition) { return }
             }
         }
@@ -319,14 +418,18 @@ final class PlaybackEngine {
         try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
         await apply(notes)
         // Nothing to play: skip the engine, whose start is unreliable on an empty graph.
-        guard !groups.isEmpty || original != nil else { return 0 }
+        guard !groups.isEmpty || original != nil || click else {
+            engine.disableManualRenderingMode()
+            return 0
+        }
         try engine.start()
         sequencer.currentPositionInSeconds = 0
+        rescheduleClick(from: 0)
         if original != nil {
             schedulePlayer(from: 0)
             player.play()
         }
-        if !groups.isEmpty {
+        if !groups.isEmpty || click {
             sequencer.prepareToPlay()
             try sequencer.start()
         }
@@ -344,9 +447,10 @@ final class PlaybackEngine {
             }
             rendered += Int(buffer.frameLength)
         }
-        if !groups.isEmpty { sequencer.stop() }
+        if !groups.isEmpty || click { sequencer.stop() }
         player.stop()
         engine.stop()
+        engine.disableManualRenderingMode()
         return count > 0 ? Float((sum / Double(count)).squareRoot()) : 0
     }
 }

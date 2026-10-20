@@ -47,6 +47,7 @@ struct AppCommands: Commands {
             Divider()
             Button("Reset Slice") { target?.resetSlice() }.disabled(!(target?.canResetSlice ?? false))
             Button("Detect Key from Audio") { target?.detectKey() }.disabled(!(target?.canDetectKey ?? false))
+            Button("Detect Tempo") { target?.detectTempo() }.disabled(!(target?.canDetectTempo ?? false))
             Divider()
             Button("Manage Models\u{2026}") { openSettings(tab: "models") }
         }
@@ -69,6 +70,8 @@ struct AppCommands: Commands {
             Button("Stop") { target?.stop() }.disabled(!(target?.canPlay ?? false))
             Toggle("Loop", isOn: Binding(get: { target?.isLooping ?? false }, set: { _ in target?.toggleLoop() }))
                 .disabled(!(target?.canPlay ?? false))
+            Toggle("Click", isOn: Binding(get: { target?.isClickOn ?? false }, set: { _ in target?.toggleClick() }))
+                .keyboardShortcut("c", modifiers: []).disabled(!(target?.canPlay ?? false))
         }
         CommandGroup(after: .windowArrangement) {
             Divider()

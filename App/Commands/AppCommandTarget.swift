@@ -15,9 +15,11 @@ struct AppCommandTarget {
     var isTranscribing = false
     var canResetSlice = false
     var canDetectKey = false
+    var canDetectTempo = false
     var canPlay = false
     var isPlaying = false
     var isLooping = false
+    var isClickOn = false
     var canSelectAudio = false
     var canSelectMIDI = false
     var hasWorkingFolder = false
@@ -37,6 +39,7 @@ struct AppCommandTarget {
     var cancelTranscription: () -> Void = {}
     var resetSlice: () -> Void = {}
     var detectKey: () -> Void = {}
+    var detectTempo: () -> Void = {}
     var toggleInspector: () -> Void = {}
     var zoomIn: () -> Void = {}
     var zoomOut: () -> Void = {}
@@ -44,6 +47,7 @@ struct AppCommandTarget {
     var togglePlayback: () -> Void = {}
     var stop: () -> Void = {}
     var toggleLoop: () -> Void = {}
+    var toggleClick: () -> Void = {}
     var selectAudio: () -> Void = {}
     var selectMIDI: () -> Void = {}
     var showWelcome: () -> Void = {}

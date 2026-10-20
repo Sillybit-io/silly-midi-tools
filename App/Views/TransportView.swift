@@ -22,23 +22,28 @@ struct TransportView: View {
                 .help("Loop (L)")
                 .accessibilityLabel("Loop")
                 .accessibilityValue(playback.loops ? "On" : "Off")
+            Toggle(isOn: $playback.click) { Label("Click", systemImage: "metronome") }
+                .toggleStyle(.button)
+                .help("Click (C)")
+                .accessibilityLabel("Click")
+                .accessibilityValue(playback.click ? "On" : "Off")
             // The hidden text is the widest the readout gets for this audio, so the toolbar never moves while playing.
             // Any room it leaves goes before the readout, which keeps the inset after it as wide as the one before Play.
             ZStack(alignment: .trailing) {
-                Text(Self.readout(playback.duration)).hidden().accessibilityHidden(true)
-                Text(Self.readout(playback.position))
+                Text(Self.readout(playback.duration, grid: playback.grid)).hidden().accessibilityHidden(true)
+                Text(Self.readout(playback.position, grid: playback.grid))
             }
             .font(.body.monospacedDigit()).foregroundStyle(Native.fgSecondary).lineLimit(1)
             .padding(.leading, Metric.sp2).padding(.trailing, Metric.sp5)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Playback position")
-                .accessibilityValue("\(PlaybackEngine.timeText(seconds: playback.position)), bar \(PlaybackEngine.barBeat(seconds: playback.position).bar) beat \(PlaybackEngine.barBeat(seconds: playback.position).beat)")
+                .accessibilityValue("\(PlaybackEngine.timeText(seconds: playback.position)), bar \(PlaybackEngine.barBeat(seconds: playback.position, grid: playback.grid).bar) beat \(PlaybackEngine.barBeat(seconds: playback.position, grid: playback.grid).beat)")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Transport")
     }
 
-    private static func readout(_ seconds: Double) -> String {
-        "\(PlaybackEngine.timeText(seconds: seconds)) \u{00B7} \(PlaybackEngine.barBeatText(seconds: seconds))"
+    private static func readout(_ seconds: Double, grid: MIDIGrid) -> String {
+        "\(PlaybackEngine.timeText(seconds: seconds)) \u{00B7} \(PlaybackEngine.barBeatText(seconds: seconds, grid: grid))"
     }
 }
