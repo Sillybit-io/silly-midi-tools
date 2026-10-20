@@ -3,6 +3,11 @@ name: Release
 # Run it by hand from the Actions tab, on main. The version is the app's
 # CFBundleShortVersionString in project.yml. The job refuses to run if that
 # version is already tagged or if CI has not passed on the commit.
+#
+# For a pre-release, give a suffix (alpha.1, beta.2, rc.1). It can run from any
+# branch, tags v<version>-<suffix> and marks the release as a pre-release, so it
+# is never the latest one. The app itself still says <version>: macOS only
+# accepts digits in CFBundleShortVersionString.
 
 on:
   workflow_dispatch:
@@ -11,6 +16,10 @@ on:
         description: Create a draft release to review before publishing
         type: boolean
         default: false
+      prerelease:
+        description: Pre-release suffix (alpha.1, beta.2 or rc.1). Leave empty for a normal release from main
+        type: string
+        default: ""
 
 concurrency:
   group: release
@@ -26,11 +35,16 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      PRERELEASE: ${{ inputs.prerelease }}
     steps:
       - name: Require main
         run: |
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Releases are made from main, not $GITHUB_REF. Pick main in Run workflow."
+          if [[ -z "$PRERELEASE" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Releases are made from main, not $GITHUB_REF. Pick main in Run workflow, or give a pre-release suffix."
+            exit 1
+          fi
+          if [[ -n "$PRERELEASE" && ! "$PRERELEASE" =~ ^(alpha|beta|rc)\.[0-9]+$ ]]; then
+            echo "::error::The pre-release suffix is alpha.N, beta.N or rc.N, not '$PRERELEASE'."
             exit 1
           fi
 
@@ -47,11 +61,12 @@ jobs:
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$version${PRERELEASE:+-$PRERELEASE}" >> "$GITHUB_ENV"
 
       - name: Refuse to reuse a version
         run: |
-          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q . || gh release view "v$VERSION" > /dev/null 2>&1; then
-            echo "::error::v$VERSION already exists. Raise CFBundleShortVersionString and CFBundleVersion in project.yml, push, and run this again."
+          if git ls-remote --tags origin "refs/tags/v$RELEASE_VERSION" | grep -q . || gh release view "v$RELEASE_VERSION" > /dev/null 2>&1; then
+            echo "::error::v$RELEASE_VERSION already exists. Raise CFBundleShortVersionString and CFBundleVersion in project.yml (or the pre-release suffix), push, and run this again."
             exit 1
           fi
 
@@ -101,7 +116,7 @@ jobs:
 
       - name: Zip the app
         run: |
-          zip="SillyMIDITools-$VERSION-macOS-arm64.zip"
+          zip="SillyMIDITools-$RELEASE_VERSION-macOS-arm64.zip"
           ditto -c -k --keepParent build/DerivedData/Build/Products/Release/SillyMIDITools.app "$zip"
           shasum -a 256 "$zip" > "$zip.sha256"
           check=$(mktemp -d)
@@ -125,13 +140,13 @@ jobs:
             echo "::error::The dSYM ($dsym_uuid) doesn't match the app ($app_uuid)."
             exit 1
           fi
-          dsym_zip="SillyMIDITools-$VERSION-macOS-arm64.dSYM.zip"
+          dsym_zip="SillyMIDITools-$RELEASE_VERSION-macOS-arm64.dSYM.zip"
           ditto -c -k --keepParent "$dsym" "$dsym_zip"
           echo "DSYM_ZIP=$dsym_zip" >> "$GITHUB_ENV"
 
       - name: Write the release notes
         run: |
-          notes=".github/release/notes/$VERSION.md"
+          notes=".github/release/notes/$RELEASE_VERSION.md"
           {
             if [[ -f "$notes" ]]; then
               cat "$notes"
@@ -149,17 +164,18 @@ jobs:
               fi
             fi
             echo
-            sed -e "s/__VERSION__/$VERSION/g" -e "s/__SHA256__/$SHA256/g" .github/release/install.md
+            sed -e "s/__VERSION__/$RELEASE_VERSION/g" -e "s/__SHA256__/$SHA256/g" .github/release/install.md
           } > release-notes.md
 
       - name: Tag the commit and create the release
         env:
           DRAFT: ${{ inputs.draft }}
         run: |
-          draft=""
-          if [[ "$DRAFT" == "true" ]]; then draft="--draft"; fi
-          gh release create "v$VERSION" "$ZIP" "$ZIP.sha256" "$DSYM_ZIP" \
+          flags=()
+          if [[ "$DRAFT" == "true" ]]; then flags+=(--draft); fi
+          if [[ -n "$PRERELEASE" ]]; then flags+=(--prerelease); fi
+          gh release create "v$RELEASE_VERSION" "$ZIP" "$ZIP.sha256" "$DSYM_ZIP" \
             --target "$GITHUB_SHA" \
-            --title "Silly MIDI Tools $VERSION" \
+            --title "Silly MIDI Tools $RELEASE_VERSION" \
             --notes-file release-notes.md \
-            $draft
+            ${flags[@]+"${flags[@]}"}
