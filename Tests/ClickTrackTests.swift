@@ -9,6 +9,11 @@ struct ClickTrackTests {
         MeterChange(bar: 4, numerator: 3, denominator: 4),
     ])
 
+    /// `sync` and `replace` schedule notes in a task that waits for the sound bank, so the count settles later.
+    private func waitForScheduledNotes(_ playback: PlaybackEngine, count: Int) async throws {
+        for _ in 0..<500 where playback.scheduledNoteCount != count { try await Task.sleep(for: .milliseconds(20)) }
+    }
+
     @Test func barBeatUsesTheChosenGrid() {
         #expect(PlaybackEngine.barBeatText(seconds: 2, grid: MIDIGrid(bpm: 90, numerator: 3, denominator: 4)) == "2.1")
         #expect(PlaybackEngine.barBeat(seconds: 1.5, grid: MIDIGrid(bpm: 120, numerator: 6, denominator: 8)) == (2, 1))
@@ -34,12 +39,12 @@ struct ClickTrackTests {
         playback.click = true
         let note = NoteEvent(onset: 0, offset: 0.8, pitch: 60, program: 0, isDrum: false, instrument: "piano", velocity: 100, pitchBends: nil)
         playback.sync(notes: [note])
-        for _ in 0..<100 where playback.scheduledNoteCount == 0 { await Task.yield() }
+        try await waitForScheduledNotes(playback, count: 1)
         #expect(playback.scheduledNoteCount == 1)
         playback.setSilenced(["piano"])
         #expect(try await playback.renderOffline(notes: [note], seconds: 0.4) > 0.0001)
         playback.replace(notes: [])
-        for _ in 0..<100 where playback.scheduledNoteCount != 0 { await Task.yield() }
+        try await waitForScheduledNotes(playback, count: 0)
         #expect(playback.scheduledNoteCount == 0)
         #expect(try await playback.renderOffline(notes: [], seconds: 0.4) > 0.0001)
     }
@@ -107,7 +112,7 @@ struct ClickTrackTests {
         playback.setOriginal(samples: original(), sampleRate: 44100)
         let note = NoteEvent(onset: 0, offset: 0.8, pitch: 60, program: 0, isDrum: false, instrument: "piano", velocity: 100, pitchBends: nil)
         playback.sync(notes: [note])
-        for _ in 0..<100 where playback.scheduledNoteCount == 0 { await Task.yield() }
+        try await waitForScheduledNotes(playback, count: 1)
         #expect(playback.scheduledNoteCount == 1)
         try playback.enableOfflineTransportForTesting()
         playback.duration = 8
