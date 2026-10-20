@@ -9,6 +9,7 @@ private enum Ev {
     case off(Int, Int)
     case program(Int, Int)
     case tempo(Int)
+    case meter(Int, Int)
     case text(String)
 
     var bytes: [UInt8] {
@@ -17,6 +18,7 @@ private enum Ev {
         case .off(let channel, let pitch): [UInt8(0x80 | channel), UInt8(pitch), 0]
         case .program(let channel, let program): [UInt8(0xC0 | channel), UInt8(program)]
         case .tempo(let microseconds): [0xFF, 0x51, 0x03, UInt8(microseconds >> 16 & 0xFF), UInt8(microseconds >> 8 & 0xFF), UInt8(microseconds & 0xFF)]
+        case .meter(let numerator, let power): [0xFF, 0x58, 0x04, UInt8(numerator), UInt8(power), 24, 8]
         case .text(let string): [0xFF, 0x01, UInt8(string.utf8.count)] + Array(string.utf8)
         }
     }
@@ -86,6 +88,37 @@ private func scratchFolder() throws -> URL {
 private let simpleFile = smf(tracks: [track([(0, .on(0, 60, 80)), (480, .off(0, 60))])])
 
 struct MIDIImporterTests {
+    @Test func firstTempoAndMeterOrDefaults() throws {
+        let notes = track([(0, .on(0, 60, 80)), (480, .off(0, 60))])
+        let withGrid = try decode(smf(tracks: [track([(0, .tempo(666_667)), (0, .meter(3, 2))]), notes]))
+        #expect(withGrid.grid == MIDIGrid(bpm: 90, numerator: 3, denominator: 4))
+        #expect(try decode(smf(tracks: [notes])).grid == .standard)
+    }
+
+    @Test func meterEventsRoundToBarsAndDefaultBeforeFirstEvent() throws {
+        let notes = track([(0, .on(0, 60, 80)), (9600, .off(0, 60))])
+        let expected = MIDIGrid(bpm: 120, meters: [MeterChange(bar: 0, numerator: 4, denominator: 4),
+                                                    MeterChange(bar: 4, numerator: 3, denominator: 4)])
+        for tick in [7680, 7700] {
+            let conductor = track([(0, .meter(4, 2)), (tick, .meter(3, 2))])
+            #expect(try decode(smf(tracks: [conductor, notes])).grid == expected)
+        }
+        let late = track([(3840, .meter(3, 2))])
+        #expect(try decode(smf(tracks: [late, notes])).grid.meters == [MeterChange(bar: 0, numerator: 4, denominator: 4),
+                                                                      MeterChange(bar: 2, numerator: 3, denominator: 4)])
+        let duplicate = track([(0, .meter(4, 2)), (7680, .meter(6, 3)), (7700, .meter(3, 2))])
+        #expect(try decode(smf(tracks: [duplicate, notes])).grid == expected)
+        let invalid = track([(0, .meter(3, 7))])
+        #expect(try decode(smf(tracks: [invalid, notes])).grid.meters[0].denominator == 4)
+    }
+
+    @Test func meterChangesUseFlattenedTempoClock() throws {
+        let notes = track([(0, .on(0, 60, 80)), (9600, .off(0, 60))])
+        let conductor = track([(0, .tempo(500_000)), (960, .tempo(1_000_000)), (4320, .meter(3, 2))])
+        let imported = try decode(smf(tracks: [conductor, notes]))
+        #expect(imported.grid.meters == [MeterChange(bar: 0, numerator: 4, denominator: 4),
+                                         MeterChange(bar: 4, numerator: 3, denominator: 4)])
+    }
     @Test func tempoChangesAreIntegratedIntoSeconds() throws {
         let conductor = track([(0, .tempo(500_000)), (480, .tempo(1_000_000))])
         let notes = track([(0, .on(0, 60, 80)), (480, .off(0, 60)), (480, .on(0, 62, 90)), (960, .off(0, 62))])
@@ -96,8 +129,7 @@ struct MIDIImporterTests {
         #expect(imported.notes.map(\.start) == [0, 0.5])
         #expect(imported.notes.map(\.duration) == [0.5, 1.0])
         #expect(imported.notes.map(\.velocity) == [80, 90])
-        #expect(imported.timebase.ticksPerQuarter == 480)
-        #expect(imported.timebase.sourceBPM == 120)
+        #expect(imported.grid.bpm == 120)
     }
 
     @Test func laterTemposAndTicksPerQuarterScaleCorrectly() throws {
@@ -106,8 +138,7 @@ struct MIDIImporterTests {
         let imported = try decode(smf(division: 960, tracks: [conductor, notes]))
         // 960 ticks at 250 ms per quarter of 960 ticks is 0.25 s, then 960 more at 500 ms is 0.5 s.
         #expect(imported.notes[0].duration == 0.75)
-        #expect(imported.timebase.ticksPerQuarter == 960)
-        #expect(imported.timebase.sourceBPM == 240)
+        #expect(imported.grid.bpm == 240)
     }
 
     @Test func typeZeroPairsNotesAndTreatsZeroVelocityAsOff() throws {

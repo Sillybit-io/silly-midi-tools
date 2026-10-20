@@ -52,7 +52,7 @@ struct MIDIFileInfo: Equatable, Hashable, Sendable {
 struct ImportedMIDI: Sendable {
     var tracks: [MIDITrack]
     var notes: [EditorNote]
-    var timebase: MIDITimebase
+    var grid: MIDIGrid
     /// Notes outside C1–B6.
     var skippedNotes: Int
     var provenance: MIDIProvenance?
@@ -64,7 +64,7 @@ struct ImportedMIDI: Sendable {
 
 extension MIDIDocument {
     convenience init(sourceName: String, imported: ImportedMIDI) {
-        self.init(sourceName: sourceName, tracks: imported.tracks, notes: imported.notes, timebase: imported.timebase,
+        self.init(sourceName: sourceName, tracks: imported.tracks, notes: imported.notes, grid: imported.grid,
                   isEdited: imported.provenance?.edited ?? false, skippedNotes: imported.skippedNotes)
     }
 }
@@ -104,6 +104,7 @@ enum MIDIImporter {
         guard case .musical(let musical) = file else { throw MIDIImportError.smpteTiming }
 
         var tempos: [(tick: Int, microseconds: Double)] = []
+        var meters: [(tick: Int, numerator: Int, denominator: Int)] = []
         var raw: [RawNote] = []
         var provenance: MIDIProvenance?
         for track in musical.tracks {
@@ -132,6 +133,9 @@ enum MIDIImporter {
                     programs[change.channel.intValue] = change.program.intValue
                 case .tempo(let tempo):
                     tempos.append((tick, Double(tempo.microsecondsPerQuarter)))
+                case .timeSignature(let meter):
+                    let power = Int(meter.denominator)
+                    meters.append((tick, Int(meter.numerator), power <= 5 ? 1 << power : 4))
                 case .text(let text):
                     if provenance == nil { provenance = MIDIProvenance(text: text.text) }
                 default:
@@ -166,7 +170,15 @@ enum MIDIImporter {
                                     velocity: MIDIEditing.clampedVelocity(item.note.velocity)))
         }
         let bpm = tempos.min { $0.tick < $1.tick }.map { 60_000_000 / $0.microseconds } ?? 120
-        return ImportedMIDI(tracks: tracks, notes: notes, timebase: MIDITimebase(ticksPerQuarter: header.ticksPerQuarter, sourceBPM: bpm),
+        var grid = MIDIGrid(bpm: bpm, numerator: 4, denominator: 4)
+        for meter in meters.enumerated().sorted(by: { ($0.element.tick, $0.offset) < ($1.element.tick, $1.offset) }).map(\.element) {
+            let seconds = clock.seconds(at: meter.tick)
+            let segment = grid.segment(atSeconds: seconds)
+            let bar = max(0, segment.bar + Int(((seconds - segment.startSeconds) / segment.secondsPerBar).rounded()))
+            grid = MIDIGrid(bpm: bpm, meters: grid.meters.filter { $0.bar < bar }
+                + [MeterChange(bar: bar, numerator: meter.numerator, denominator: meter.denominator)])
+        }
+        return ImportedMIDI(tracks: tracks, notes: notes, grid: grid,
                             skippedNotes: skipped, provenance: provenance)
     }
 

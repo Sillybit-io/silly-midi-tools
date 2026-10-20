@@ -9,6 +9,7 @@ struct MIDIExportOptions: Sendable {
     /// Slice length in seconds; notes running past it are clipped.
     var sliceLength: Double?
     var relativeTimeline = true
+    var grid: MIDIGrid = .standard
     var defaultVelocity = 100
     var copyright: String?
     /// A plain text event on the conductor track, such as where the file came from.
@@ -21,8 +22,6 @@ struct MIDIExportOptions: Sendable {
 
 enum MIDIBuilder {
     static let ticksPerQuarter: UInt16 = 480
-    /// 120 bpm: two quarter notes per second.
-    static let ticksPerSecond = 960.0
     static let drumChannel = 9
 
     private enum Kind: Int { case programChange, noteOff, pitchBend, noteOn }
@@ -37,7 +36,7 @@ enum MIDIBuilder {
         String(text.unicodeScalars.map { $0.isASCII ? Character($0) : "?" })
     }
 
-    static func tick(_ seconds: Double) -> Int { max(0, Int((seconds * ticksPerSecond).rounded())) }
+    static func tick(_ seconds: Double, bpm: Double = 120) -> Int { max(0, Int((seconds * Double(ticksPerQuarter) * bpm / 60).rounded())) }
 
     static func channels(for groups: [String], drums: Set<String>) -> [String: Int] {
         var map: [String: Int] = [:]
@@ -58,9 +57,10 @@ enum MIDIBuilder {
 
         var conductor: [MusicalMIDI1File.Track.Event] = [
             .text(type: .trackOrSequenceName, string: ascii(options.title)),
-            .tempo(bpm: 120),
-            .timeSignature(numerator: 4, denominator: 2),
+            .tempo(bpm: options.grid.bpm),
         ]
+        let meters = options.grid.timeSignatureEvents
+        conductor.append(.timeSignature(numerator: UInt8(meters[0].numerator), denominator: UInt8(meters[0].denominatorPower)))
         if let copyright = options.copyright, !copyright.isEmpty {
             conductor.append(.text(type: .copyright, string: ascii(copyright)))
         }
@@ -69,6 +69,12 @@ enum MIDIBuilder {
         }
         if let provenance = options.provenance {
             conductor.append(.text(type: .text, string: provenance.text))
+        }
+        var previousMeterTick = 0
+        for meter in meters.dropFirst() {
+            conductor.append(.timeSignature(delta: .ticks(UInt32(meter.tick - previousMeterTick)),
+                                            numerator: UInt8(meter.numerator), denominator: UInt8(meter.denominatorPower)))
+            previousMeterTick = meter.tick
         }
 
         let grouped = Dictionary(grouping: notes) { $0.isDrum ? "drums" : $0.instrument }
@@ -89,8 +95,8 @@ enum MIDIBuilder {
                 if let limit { end = min(end, limit) }
                 if let limit, note.onset >= limit { continue }
                 guard end > note.onset else { continue }
-                let start = tick(note.onset + offset)
-                let stop = max(start + 1, tick(end + offset))
+                let start = tick(note.onset + offset, bpm: options.grid.bpm)
+                let stop = max(start + 1, tick(end + offset, bpm: options.grid.bpm))
                 let key = UInt7(UInt8(clamping: min(max(note.pitch, 0), 127)))
                 let velocity = UInt7(UInt8(clamping: min(max(note.velocity ?? options.defaultVelocity, 1), 127)))
                 timed.append(Timed(tick: start, kind: .noteOn) { .noteOn(delta: $0, note: key, velocity: .midi1(velocity), channel: ch) })
@@ -99,7 +105,7 @@ enum MIDIBuilder {
                 if options.includesPitchBends, let bends = note.pitchBends, !bends.isEmpty {
                     for (i, bend) in bends.enumerated() {
                         let fraction = bends.count > 1 ? Double(i) / Double(bends.count - 1) : 0
-                        let at = tick(note.onset + (end - note.onset) * fraction + offset)
+                        let at = tick(note.onset + (end - note.onset) * fraction + offset, bpm: options.grid.bpm)
                         timed.append(bendEvent(tick: min(at, stop), units: bend, channel: ch))
                     }
                     timed.append(Timed(tick: stop, kind: .pitchBend) { delta in

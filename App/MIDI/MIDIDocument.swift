@@ -32,16 +32,10 @@ struct MIDITrack: Identifiable, Equatable, Sendable {
     }
 }
 
-/// What a saved file needs to keep from the file it came from. The editor grid itself is always 120 BPM in 4/4.
-struct MIDITimebase: Equatable, Sendable {
-    var ticksPerQuarter = 480
-    var sourceBPM = 120.0
-}
-
 @MainActor @Observable
 final class MIDIDocument {
     let sourceName: String
-    let timebase: MIDITimebase
+    private(set) var grid: MIDIGrid
     /// Notes left out because they sit outside C1–B6.
     let skippedNotes: Int
 
@@ -56,21 +50,23 @@ final class MIDIDocument {
     /// Counts applied edits, undos and redos, so a view can refresh what the undo manager can do.
     private(set) var revision = 0
     private(set) var savedNotes: [EditorNote]
+    private(set) var savedGrid: MIDIGrid
 
     var snap: SnapGrid = .sixteenth
     var drawTrackID: String
     @ObservationIgnored var undoManager: UndoManager?
     @ObservationIgnored private var nextID: Int
 
-    init(sourceName: String, tracks: [MIDITrack], notes: [EditorNote], timebase: MIDITimebase = MIDITimebase(),
+    init(sourceName: String, tracks: [MIDITrack], notes: [EditorNote], grid: MIDIGrid = .standard,
          isEdited: Bool = false, skippedNotes: Int = 0) {
         self.sourceName = sourceName
         self.tracks = tracks
         self.notes = notes
-        self.timebase = timebase
+        self.grid = grid
         self.isEdited = isEdited
         self.skippedNotes = skippedNotes
         savedNotes = notes
+        savedGrid = grid
         drawTrackID = tracks.first?.id ?? ""
         nextID = (notes.map(\.id).max() ?? 0) + 1
     }
@@ -93,7 +89,7 @@ final class MIDIDocument {
         self.init(sourceName: sourceName, tracks: tracks, notes: notes, skippedNotes: skipped)
     }
 
-    var isDirty: Bool { notes != savedNotes }
+    var isDirty: Bool { notes != savedNotes || grid != savedGrid }
     var canUndo: Bool { undoManager?.canUndo ?? false }
     var canRedo: Bool { undoManager?.canRedo ?? false }
     var selectedNotes: [EditorNote] { notes.filter { selection.contains($0.id) } }
@@ -110,6 +106,7 @@ final class MIDIDocument {
 
     func markSaved() {
         savedNotes = notes
+        savedGrid = grid
     }
 
     // MARK: Selection
@@ -193,6 +190,22 @@ final class MIDIDocument {
 
     // MARK: Edits
 
+    @discardableResult
+    func setGrid(_ value: MIDIGrid, named name: String? = nil) -> Bool {
+        let old = State(tracks: tracks, notes: notes, grid: grid)
+        let new = State(tracks: tracks, notes: notes, grid: value)
+        guard new != old else { return false }
+        let action = name ?? (value.meters.count > grid.meters.count ? "Add Meter Change" : "Change Tempo")
+        replace(old, with: new, named: action)
+        return true
+    }
+
+    @discardableResult
+    func addMeterChange(atBar bar: Int, numerator: Int, denominator: Int) -> Bool {
+        setGrid(MIDIGrid(bpm: grid.bpm, meters: grid.meters + [MeterChange(bar: bar, numerator: numerator, denominator: denominator)]),
+                named: "Add Meter Change")
+    }
+
     /// Draws a note on the draw track and selects it. The draw track may be a new instrument class; its track is created
     /// with the first note, in the same undo step. Returns the note's id, or nil when the draw is rejected.
     @discardableResult
@@ -200,7 +213,8 @@ final class MIDIDocument {
         let existing = tracks.contains { $0.id == drawTrackID }
         let added = existing ? nil : MIDITrack.newTrack(forClass: drawTrackID)
         guard existing || added != nil, !hiddenTracks.contains(drawTrackID),
-              let note = MIDIEditing.draw(at: time, pitch: pitch, track: drawTrackID, id: nextID, grid: snap, length: length)
+               let note = MIDIEditing.draw(at: time, pitch: pitch, track: drawTrackID, id: nextID, grid: snap, length: length,
+                                           quarter: grid.secondsPerQuarter)
         else { return nil }
         nextID += 1
         commit(notes + [note], tracks: added.map { tracks + [$0] }, named: "Draw Note")
@@ -226,12 +240,13 @@ final class MIDIDocument {
 
     @discardableResult
     func move(_ ids: Set<Int>? = nil, deltaTime: Double, deltaPitch: Int) -> Bool {
-        commit(MIDIEditing.move(notes, ids: ids ?? selection, deltaTime: deltaTime, deltaPitch: deltaPitch, grid: snap), named: "Move Notes")
+        commit(MIDIEditing.move(notes, ids: ids ?? selection, deltaTime: deltaTime, deltaPitch: deltaPitch, grid: snap,
+                                quarter: grid.secondsPerQuarter), named: "Move Notes")
     }
 
     @discardableResult
     func resize(_ ids: Set<Int>? = nil, delta: Double) -> Bool {
-        commit(MIDIEditing.resize(notes, ids: ids ?? selection, delta: delta, grid: snap), named: "Resize Notes")
+        commit(MIDIEditing.resize(notes, ids: ids ?? selection, delta: delta, grid: snap, quarter: grid.secondsPerQuarter), named: "Resize Notes")
     }
 
     @discardableResult
@@ -241,13 +256,14 @@ final class MIDIDocument {
 
     @discardableResult
     func nudge(steps: Int) -> Bool {
-        commit(MIDIEditing.nudge(notes, ids: selection, steps: steps, grid: snap), named: "Nudge Notes")
+        commit(MIDIEditing.nudge(notes, ids: selection, steps: steps, grid: snap, quarter: grid.secondsPerQuarter), named: "Nudge Notes")
     }
 
     /// Quantizes the selection, or every note when nothing is selected.
     @discardableResult
     func quantize() -> Bool {
-        commit(MIDIEditing.quantize(notes, ids: selection.isEmpty ? nil : selection, grid: snap), named: "Quantize")
+        commit(MIDIEditing.quantize(notes, ids: selection.isEmpty ? nil : selection, grid: snap,
+                                    quarter: grid.secondsPerQuarter), named: "Quantize")
     }
 
     @discardableResult
@@ -285,13 +301,14 @@ final class MIDIDocument {
     private struct State: Equatable, Sendable {
         var tracks: [MIDITrack]
         var notes: [EditorNote]
+        var grid: MIDIGrid
     }
 
     @discardableResult
     private func commit(_ edited: [EditorNote]?, tracks newTracks: [MIDITrack]? = nil, named name: String) -> Bool {
         guard let edited else { return false }
-        let new = State(tracks: newTracks ?? tracks, notes: edited)
-        let old = State(tracks: tracks, notes: notes)
+        let new = State(tracks: newTracks ?? tracks, notes: edited, grid: grid)
+        let old = State(tracks: tracks, notes: notes, grid: grid)
         guard new != old else { return false }
         replace(old, with: new, named: name)
         return true
@@ -301,6 +318,7 @@ final class MIDIDocument {
     private func replace(_ old: State, with new: State, named name: String) {
         tracks = new.tracks
         notes = new.notes
+        grid = new.grid
         selection.formIntersection(Set(new.notes.map(\.id)))
         isEdited = true
         revision += 1

@@ -133,6 +133,7 @@ final class MIDISaveCoordinator {
             var provenance = editor.provenance ?? MIDIProvenance()
             provenance.edited = true
             var options = MIDIExportOptions()
+            options.grid = document.grid
             options.title = editor.name
             options.provenance = provenance
             options.copyright = ModelCatalog.entry(id: provenance.modelID)?.exportNotice

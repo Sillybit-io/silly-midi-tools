@@ -40,6 +40,54 @@ struct MIDIExportTests {
         #expect((off?.tick ?? 0) - (on?.tick ?? 0) == 480)
     }
 
+    @Test func tempoControlsTicksAndConductorMetadata() throws {
+        var options = MIDIExportOptions()
+        options.grid = MIDIGrid(bpm: 90, numerator: 3, denominator: 4)
+        let file = try parse(try MIDIBuilder.build(notes: [note(1, 1.5, 60)], options: options))
+        let events = absoluteEvents(file.tracks[1], file)
+        #expect(events.first { if case .noteOn = $0.event { true } else { false } }?.tick == 720)
+        #expect(events.first { if case .noteOff = $0.event { true } else { false } }?.tick == 1080)
+        let conductor = absoluteEvents(file.tracks[0], file)
+        let bpm = conductor.compactMap { if case .tempo(let tempo) = $0.event { return 60_000_000 / Double(tempo.microsecondsPerQuarter) }; return nil }
+        #expect(bpm.count == 1 && abs(bpm[0] - 90) < 0.001)
+        #expect(conductor.contains { if case .timeSignature(let meter) = $0.event { return meter.numerator == 3 && meter.denominator == 2 }; return false })
+
+        options.grid = MIDIGrid(bpm: 93.5, numerator: 6, denominator: 8)
+        let sixEight = try parse(try MIDIBuilder.build(notes: [note(1, 1.5, 60)], options: options))
+        #expect(absoluteEvents(sixEight.tracks[1], sixEight).first { if case .noteOn = $0.event { true } else { false } }?.tick == 748)
+        #expect(absoluteEvents(sixEight.tracks[0], sixEight).contains {
+            if case .timeSignature(let meter) = $0.event { return meter.numerator == 6 && meter.denominator == 3 }; return false
+        })
+    }
+
+    @Test func meterMapAndAbsoluteSliceOrigin() throws {
+        var options = MIDIExportOptions()
+        options.grid = MIDIGrid(bpm: 120, meters: [MeterChange(bar: 0, numerator: 4, denominator: 4),
+                                                     MeterChange(bar: 4, numerator: 3, denominator: 4)])
+        options.sliceStart = 10.3
+        options.comment = "origin"
+        for relative in [true, false] {
+            options.relativeTimeline = relative
+            let data = try MIDIBuilder.build(notes: [note(8, 9, 60)], options: options)
+            let file = try parse(data)
+            let signatures = absoluteEvents(file.tracks[0], file).compactMap { item -> Int? in
+                if case .timeSignature = item.event { return item.tick }; return nil
+            }
+            #expect(signatures == [0, 7680])
+            #expect(absoluteEvents(file.tracks[0], file).contains { item in
+                if case .text(let text) = item.event { return text.text == "origin" && item.tick == 0 }; return false
+            })
+            #expect(file.tracks.dropFirst().allSatisfy { track in
+                !absoluteEvents(track, file).contains { if case .timeSignature = $0.event { return true }; return false }
+            })
+            let on = absoluteEvents(file.tracks[1], file).first { if case .noteOn = $0.event { return true }; return false }
+            #expect(on?.tick == (relative ? 7680 : 17568))
+            let imported = try MIDIImporter.decode(data)
+            #expect(imported.grid == options.grid)
+            #expect(abs(imported.notes[0].start - (relative ? 8 : 18.3)) < 0.000001)
+        }
+    }
+
     @Test func copyrightEventPresentOnlyWhenRequested() throws {
         func copyrights(_ options: MIDIExportOptions) throws -> Int {
             let file = try parse(try MIDIBuilder.build(notes: [note(0, 1, 60)], options: options))

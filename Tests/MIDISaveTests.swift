@@ -52,11 +52,13 @@ private struct Fixture {
     let outcomes = Outcomes()
     let saved = Outcomes()
 
-    init(provenance: MIDIProvenance? = MIDIProvenance(source: "file:///Audio/take.wav", modelID: "basic-pitch")) throws {
+    init(provenance: MIDIProvenance? = MIDIProvenance(source: "file:///Audio/take.wav", modelID: "basic-pitch"),
+         grid: MIDIGrid = .standard) throws {
         folder = try scratchFolder()
         url = folder.appending(path: "take.mid")
         var options = MIDIExportOptions()
         options.provenance = provenance
+        options.grid = grid
         try MIDIBuilder.build(notes: [note(0, 60), note(1, 64, velocity: 100), note(2, 67)], options: options).write(to: url)
         editor = try MIDIEditorModel.load(url)
         coordinator.editor = editor
@@ -88,6 +90,32 @@ private struct Fixture {
 
 @MainActor
 struct MIDISaveTests {
+    @Test func gridOnlySaveKeepsNoteSecondsAndReopensMeterMap() throws {
+        for grid in [MIDIGrid(bpm: 90, numerator: 3, denominator: 4), MIDIGrid(bpm: 95, numerator: 3, denominator: 4),
+                     MIDIGrid(bpm: 120, meters: [MeterChange(bar: 0, numerator: 4, denominator: 4),
+                                                  MeterChange(bar: 4, numerator: 3, denominator: 4)])] {
+            let fixture = try Fixture()
+            let before = fixture.editor.document.notes.map(\.start)
+            #expect(fixture.editor.document.setGrid(grid))
+            #expect(fixture.coordinator.hasUnsavedChanges)
+            #expect(fixture.coordinator.saveOpenFile())
+            let reopened = try MIDIEditorModel.load(fixture.url)
+            #expect(reopened.document.grid == grid)
+            #expect(zip(reopened.document.notes.map(\.start), before).allSatisfy { abs($0 - $1) < 0.00001 })
+            #expect(!fixture.editor.document.isDirty)
+        }
+    }
+
+    @Test func failedGridSaveKeepsOldBytesAndDirtyState() throws {
+        let fixture = try Fixture()
+        fixture.editor.document.setGrid(MIDIGrid(bpm: 90, numerator: 3, denominator: 4))
+        let before = try sha(fixture.url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: fixture.folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.folder.path) }
+        #expect(!fixture.coordinator.saveOpenFile())
+        #expect(fixture.editor.document.isDirty)
+        #expect(try sha(fixture.url) == before)
+    }
     @Test func savingWritesTheEditsAndMarksTheFileEdited() throws {
         let fixture = try Fixture()
         let before = try values(fixture.url)

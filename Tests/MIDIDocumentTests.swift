@@ -29,6 +29,34 @@ private func makeUndoManager() -> UndoManager {
 
 @MainActor
 struct MIDIDocumentTests {
+    @Test func gridIsSavedAndRestoredByOneUndoPerEdit() {
+        let undo = makeUndoManager()
+        let document = makeDocument(undo: undo)
+        let originalNotes = document.notes
+        let ninety = MIDIGrid(bpm: 90, numerator: 3, denominator: 4)
+        #expect(document.setGrid(ninety))
+        #expect(!document.setGrid(ninety))
+        #expect(undo.undoActionName == "Change Tempo" && document.isDirty)
+        #expect(document.notes == originalNotes)
+        document.markSaved()
+        #expect(!document.isDirty)
+        document.undo()
+        #expect(document.grid == .standard && document.isDirty && !document.canUndo)
+        document.redo()
+        #expect(document.grid == ninety && !document.isDirty)
+        #expect(document.setGrid(MIDIGrid(bpm: 90, meters: ninety.meters + [MeterChange(bar: 4, numerator: 6, denominator: 8)])))
+        #expect(undo.undoActionName == "Add Meter Change")
+        document.undo()
+        #expect(document.grid == ninety && !document.isDirty && document.notes == originalNotes)
+    }
+
+    @Test func snapUsesDocumentQuarter() {
+        let document = makeDocument()
+        document.setGrid(MIDIGrid(bpm: 90, numerator: 3, denominator: 4))
+        #expect(abs(MIDIEditing.snap(0.17, to: .sixteenth, quarter: document.grid.secondsPerQuarter) - 1.0 / 6) < 1e-9)
+        let id = document.draw(at: 0.17, pitch: 70)
+        #expect(abs((document.notes.first { $0.id == id }?.duration ?? 0) - 1.0 / 6) < 1e-9)
+    }
     @Test func selectionByClickShiftAndMarquee() {
         let document = makeDocument()
         document.select(2)

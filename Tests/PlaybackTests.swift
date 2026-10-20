@@ -156,7 +156,7 @@ extension PlaybackTests {
         let notes = [EditorNote(id: 1, track: "piano", pitch: 60, start: 0, duration: 1, velocity: 90),
                      EditorNote(id: 2, track: "kit", pitch: 36, start: 0, duration: 0.5, velocity: 100),
                      EditorNote(id: 3, track: "bass", pitch: 40, start: 1, duration: 1, velocity: 80)]
-        let imported = ImportedMIDI(tracks: tracks, notes: notes, timebase: MIDITimebase(), skippedNotes: 0, provenance: nil)
+        let imported = ImportedMIDI(tracks: tracks, notes: notes, grid: .standard, skippedNotes: 0, provenance: nil)
         let editor = MIDIEditorModel(url: URL(fileURLWithPath: "/tmp/silence.mid"), imported: imported)
         let document = editor.document
         #expect(editor.silencedGroups.isEmpty)
@@ -179,7 +179,7 @@ extension PlaybackTests {
         let tracks = [MIDITrack(id: "piano", name: "piano", program: 0, isDrums: false)]
         let notes = [EditorNote(id: 1, track: "piano", pitch: 60, start: 0, duration: 1, velocity: 90),
                      EditorNote(id: 2, track: "piano", pitch: 62, start: 2.5, duration: 1.5, velocity: 90)]
-        let imported = ImportedMIDI(tracks: tracks, notes: notes, timebase: MIDITimebase(), skippedNotes: 0, provenance: nil)
+        let imported = ImportedMIDI(tracks: tracks, notes: notes, grid: .standard, skippedNotes: 0, provenance: nil)
         let editor = MIDIEditorModel(url: URL(fileURLWithPath: "/tmp/extent.mid"), imported: imported)
         editor.syncPlayback()
         #expect(editor.playback.duration == 4)

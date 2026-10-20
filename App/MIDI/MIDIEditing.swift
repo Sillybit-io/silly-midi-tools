@@ -1,16 +1,16 @@
 import CoreGraphics
 import Foundation
 
-/// The editor's snap grid. The export grid is fixed at 120 BPM in 4/4, so a quarter note is half a second.
+/// Fractions of a quarter note; the actual duration comes from the document tempo.
 enum SnapGrid: Double, CaseIterable, Identifiable, Sendable {
-    case quarter = 0.5
-    case eighth = 0.25
-    case sixteenth = 0.125
-    case thirtySecond = 0.0625
+    case quarter = 1
+    case eighth = 0.5
+    case sixteenth = 0.25
+    case thirtySecond = 0.125
     case off = 0
 
     var id: Double { rawValue }
-    var step: Double { rawValue }
+    func step(quarter: Double) -> Double { rawValue * quarter }
 
     var title: String {
         switch self {
@@ -41,22 +41,24 @@ enum MIDIEditing {
     static let pitchRange = 24...95
     static let velocityRange = 1...127
     static let defaultVelocity = 100
-    static let secondsPerBeat = 0.5
+    @available(*, deprecated, message: "RollDrawing uses this until its grid migration")
     static let secondsPerBar = 2.0
     /// The shortest note when the grid is off.
     static let minimumDuration = 0.03
     static let resizeEdgeWidth: CGFloat = 6
 
-    static func snap(_ seconds: Double, to grid: SnapGrid) -> Double {
-        grid == .off ? seconds : (seconds / grid.step).rounded() * grid.step
+    static func snap(_ seconds: Double, to grid: SnapGrid, quarter: Double = 0.5) -> Double {
+        let step = grid.step(quarter: quarter)
+        return grid == .off ? seconds : (seconds / step).rounded() * step
     }
 
-    static func snapFloor(_ seconds: Double, to grid: SnapGrid) -> Double {
-        grid == .off ? seconds : (seconds / grid.step).rounded(.down) * grid.step
+    static func snapFloor(_ seconds: Double, to grid: SnapGrid, quarter: Double = 0.5) -> Double {
+        let step = grid.step(quarter: quarter)
+        return grid == .off ? seconds : (seconds / step).rounded(.down) * step
     }
 
-    static func minimumLength(on grid: SnapGrid) -> Double {
-        grid == .off ? minimumDuration : grid.step
+    static func minimumLength(on grid: SnapGrid, quarter: Double = 0.5) -> Double {
+        grid == .off ? minimumDuration : grid.step(quarter: quarter)
     }
 
     static func clampedVelocity(_ value: Int) -> Int {
@@ -64,15 +66,17 @@ enum MIDIEditing {
     }
 
     /// A new note at `time` floored to the grid. Rejected outside C1–B6 or before time zero.
-    static func draw(at time: Double, pitch: Int, track: String, id: Int, grid: SnapGrid, length: Double? = nil) -> EditorNote? {
+    static func draw(at time: Double, pitch: Int, track: String, id: Int, grid: SnapGrid, length: Double? = nil,
+                     quarter: Double = 0.5) -> EditorNote? {
         guard time.isFinite, time >= 0, pitchRange.contains(pitch) else { return nil }
         let duration: Double
         if let length, length.isFinite {
-            duration = max(minimumLength(on: grid), snap(length, to: grid))
+            duration = max(minimumLength(on: grid, quarter: quarter), snap(length, to: grid, quarter: quarter))
         } else {
-            duration = grid == .off ? 0.25 : grid.step
+            duration = grid == .off ? 0.25 : grid.step(quarter: quarter)
         }
-        return EditorNote(id: id, track: track, pitch: pitch, start: snapFloor(time, to: grid), duration: duration, velocity: defaultVelocity)
+        return EditorNote(id: id, track: track, pitch: pitch, start: snapFloor(time, to: grid, quarter: quarter), duration: duration,
+                          velocity: defaultVelocity)
     }
 
     static func erase(_ notes: [EditorNote], ids: Set<Int>) -> [EditorNote]? {
@@ -81,11 +85,12 @@ enum MIDIEditing {
     }
 
     /// Moves the group by whole grid steps. The group stops at time zero and at C1/B6 instead of bending its shape.
-    static func move(_ notes: [EditorNote], ids: Set<Int>, deltaTime: Double, deltaPitch: Int, grid: SnapGrid) -> [EditorNote]? {
+    static func move(_ notes: [EditorNote], ids: Set<Int>, deltaTime: Double, deltaPitch: Int, grid: SnapGrid,
+                     quarter: Double = 0.5) -> [EditorNote]? {
         let moving = notes.filter { ids.contains($0.id) }
         guard let earliest = moving.map(\.start).min(), let lowest = moving.map(\.pitch).min(),
               let highest = moving.map(\.pitch).max(), deltaTime.isFinite else { return nil }
-        let time = max(snap(deltaTime, to: grid), -earliest)
+        let time = max(snap(deltaTime, to: grid, quarter: quarter), -earliest)
         let semitones = min(max(deltaPitch, pitchRange.lowerBound - lowest), pitchRange.upperBound - highest)
         guard time != 0 || semitones != 0 else { return nil }
         return notes.map { note in
@@ -102,20 +107,20 @@ enum MIDIEditing {
     }
 
     /// Shifts by `steps` grid steps (an eighth of a second when the grid is off).
-    static func nudge(_ notes: [EditorNote], ids: Set<Int>, steps: Int, grid: SnapGrid) -> [EditorNote]? {
-        let step = grid == .off ? 0.125 : grid.step
+    static func nudge(_ notes: [EditorNote], ids: Set<Int>, steps: Int, grid: SnapGrid, quarter: Double = 0.5) -> [EditorNote]? {
+        let step = grid == .off ? 0.125 : grid.step(quarter: quarter)
         return move(notes, ids: ids, deltaTime: Double(steps) * step, deltaPitch: 0, grid: .off)
     }
 
     /// Changes each note's length by `delta`, snapped, never below the shortest note the grid allows.
-    static func resize(_ notes: [EditorNote], ids: Set<Int>, delta: Double, grid: SnapGrid) -> [EditorNote]? {
+    static func resize(_ notes: [EditorNote], ids: Set<Int>, delta: Double, grid: SnapGrid, quarter: Double = 0.5) -> [EditorNote]? {
         guard delta.isFinite else { return nil }
-        let floor = minimumLength(on: grid)
+        let floor = minimumLength(on: grid, quarter: quarter)
         var changed = false
         let result = notes.map { note in
             guard ids.contains(note.id) else { return note }
             var resized = note
-            resized.duration = max(floor, snap(note.duration + delta, to: grid))
+            resized.duration = max(floor, snap(note.duration + delta, to: grid, quarter: quarter))
             if resized.duration != note.duration { changed = true }
             return resized
         }
@@ -123,15 +128,15 @@ enum MIDIEditing {
     }
 
     /// Snaps starts and ends to the grid. `ids` nil means every note.
-    static func quantize(_ notes: [EditorNote], ids: Set<Int>?, grid: SnapGrid) -> [EditorNote]? {
+    static func quantize(_ notes: [EditorNote], ids: Set<Int>?, grid: SnapGrid, quarter: Double = 0.5) -> [EditorNote]? {
         guard grid != .off else { return nil }
         var changed = false
         let result = notes.map { note in
             guard ids?.contains(note.id) ?? true else { return note }
             var quantized = note
-            let end = snap(note.end, to: grid)
-            quantized.start = snap(note.start, to: grid)
-            quantized.duration = max(grid.step, end - quantized.start)
+            let end = snap(note.end, to: grid, quarter: quarter)
+            quantized.start = snap(note.start, to: grid, quarter: quarter)
+            quantized.duration = max(grid.step(quarter: quarter), end - quantized.start)
             if quantized != note { changed = true }
             return quantized
         }
@@ -233,8 +238,8 @@ enum MIDIEditing {
     }
 
     /// A drawn note starts one grid step long (a quarter second with the grid off); dragging right lengthens it.
-    static func drawLength(dragSeconds: Double, grid: SnapGrid) -> Double {
-        let base = grid == .off ? 0.25 : grid.step
-        return max(minimumLength(on: grid), snap(base + dragSeconds, to: grid))
+    static func drawLength(dragSeconds: Double, grid: SnapGrid, quarter: Double = 0.5) -> Double {
+        let base = grid == .off ? 0.25 : grid.step(quarter: quarter)
+        return max(minimumLength(on: grid, quarter: quarter), snap(base + dragSeconds, to: grid, quarter: quarter))
     }
 }
