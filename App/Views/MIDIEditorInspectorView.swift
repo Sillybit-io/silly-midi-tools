@@ -9,6 +9,7 @@ struct MIDIEditorInspectorView: View {
 
     @State private var name = ""
     @State private var renameError: String?
+    @State private var tempoCandidates: [TempoCandidate] = []
 
     private var document: MIDIDocument { editor.document }
 
@@ -23,9 +24,13 @@ struct MIDIEditorInspectorView: View {
             fileSection
             selectionSection
             tracksSection
+            tempoSection
             keySection
         }
         .formStyle(.grouped)
+        .onChange(of: document.revision, initial: true) { _, _ in
+            tempoCandidates = TempoFromNotes.rank(notes: document.noteEvents, currentBPM: document.grid.bpm)
+        }
     }
 
     // MARK: File
@@ -70,7 +75,6 @@ struct MIDIEditorInspectorView: View {
                     }
                 }
             }
-            LabeledContent("Tempo", value: "120 BPM \u{00B7} 4/4")
         } header: {
             Text("File")
         } footer: {
@@ -164,6 +168,15 @@ struct MIDIEditorInspectorView: View {
     private func flag(_ title: String, _ label: String, on: Bool, action: @escaping () -> Void) -> some View {
         Toggle(title, isOn: Binding(get: { on }, set: { _ in action() }))
             .toggleStyle(.button).controlSize(.small).help(label).accessibilityLabel(label)
+    }
+
+    private var tempoSection: some View {
+        Section("Tempo") {
+            TempoFieldsView(grid: Binding(get: { document.grid }, set: { document.setGrid($0) }), showsMeterChanges: true)
+            TempoCandidatesView(title: "Tempo from notes", candidates: tempoCandidates, currentBPM: document.grid.bpm) { candidate in
+                document.setGrid(MIDIGrid(bpm: candidate.bpm, meters: document.grid.meters), named: "Use Tempo From Notes")
+            }
+        }
     }
 
     // MARK: Key

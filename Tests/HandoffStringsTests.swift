@@ -27,8 +27,15 @@ struct HandoffStringsTests {
     }
 
     @Test func theEditorSubtitleAndFooterMatchThePrototype() {
-        #expect(ContentView.editorSubtitle(notes: 24, tracks: 1, dirty: false) == "24 notes \u{00B7} 1 track \u{00B7} 120 BPM 4/4")
-        #expect(ContentView.editorSubtitle(notes: 1, tracks: 3, dirty: true) == "1 note \u{00B7} 3 tracks \u{00B7} 120 BPM 4/4 \u{00B7} Edited")
+        #expect(ContentView.editorSubtitle(notes: 24, tracks: 1, grid: .standard, dirty: false)
+            == "24 notes \u{00B7} 1 track \u{00B7} 120 BPM 4/4")
+        #expect(ContentView.editorSubtitle(notes: 1, tracks: 3, grid: MIDIGrid(bpm: 95, numerator: 3, denominator: 4), dirty: true)
+            == "1 note \u{00B7} 3 tracks \u{00B7} 95 BPM 3/4 \u{00B7} Edited")
+        let threeMeters = MIDIGrid(bpm: 120, meters: [MeterChange(bar: 0, numerator: 4, denominator: 4),
+                                                       MeterChange(bar: 2, numerator: 3, denominator: 4),
+                                                       MeterChange(bar: 4, numerator: 6, denominator: 8)])
+        #expect(ContentView.editorSubtitle(notes: 8, tracks: 2, grid: threeMeters, dirty: false)
+            == "8 notes \u{00B7} 2 tracks \u{00B7} 120 BPM 4/4 \u{00B7} 2 meter changes")
 
         let notes = [EditorNote(id: 1, track: "piano", pitch: 60, start: 1.25, duration: 0.5, velocity: 90),
                      EditorNote(id: 2, track: "piano", pitch: 64, start: 2, duration: 0.5, velocity: 90)]
@@ -38,6 +45,15 @@ struct HandoffStringsTests {
         #expect(MIDIEditorView.summary(notes: notes, selection: [1], trackName: name, skipped: 0) == "C4 \u{00B7} Piano \u{00B7} 1.25 s \u{2014} 1 of 2 selected")
         #expect(MIDIEditorView.summary(notes: notes, selection: [1, 2], trackName: name, skipped: 0) == "2 of 2 notes selected")
         #expect(MIDIEditorView.summary(notes: notes, selection: [], trackName: name, skipped: 3).hasSuffix(" \u{00B7} 3 outside C1\u{2013}B6 skipped"))
+    }
+
+    @Test func subtitleFormatsFractionalTempoSingleMeterChangeAndDirtySuffix() {
+        let grid = MIDIGrid(bpm: 93.5, meters: [MeterChange(bar: 0, numerator: 6, denominator: 8),
+                                                MeterChange(bar: 3, numerator: 3, denominator: 4)])
+        #expect(ContentView.editorSubtitle(notes: 1, tracks: 1, grid: grid, dirty: true)
+            == "1 note \u{00B7} 1 track \u{00B7} 93.5 BPM 6/8 \u{00B7} 1 meter change \u{00B7} Edited")
+        #expect(ContentView.editorSubtitle(notes: 0, tracks: 1, grid: MIDIGrid(bpm: 93.55, numerator: 4, denominator: 4), dirty: false)
+            == "0 notes \u{00B7} 1 track \u{00B7} 93.55 BPM 4/4")
     }
 
     @Test func audioThatCantBeOpenedGetsTheHandoffAlert() throws {

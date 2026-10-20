@@ -140,10 +140,12 @@ struct ContentView: View {
         target.isTranscribing = session.isBusy || screen.isPreparing
         target.canResetSlice = isAudio
         target.canDetectKey = isAudio && !screen.isDetectingKey
+        target.canDetectTempo = isAudio && screen.canAnalyze
         let transport = isMIDI ? editor?.playback : isAudio ? screen.playback : nil
         target.canPlay = transport != nil
         target.isPlaying = transport?.isPlaying ?? false
         target.isLooping = transport?.loops ?? false
+        target.isClickOn = transport?.click ?? false
         target.canSelectAudio = model.document != nil || !library.audio.isEmpty
         target.canSelectMIDI = !library.midi.isEmpty
         target.hasWorkingFolder = workingFolder.folder != nil
@@ -165,6 +167,7 @@ struct ContentView: View {
         target.cancelTranscription = { screen.cancel() }
         target.resetSlice = { model.slice.reset() }
         target.detectKey = { screen.detectKeyFromAudio() }
+        target.detectTempo = { screen.detectTempoFromAudio() }
         target.toggleInspector = { showInspector.toggle() }
         target.zoomIn = { zoom(by: 1.25) }
         target.zoomOut = { zoom(by: 0.8) }
@@ -172,6 +175,7 @@ struct ContentView: View {
         target.togglePlayback = { if isMIDI { editor?.togglePlayback() } else { screen.togglePlayback() } }
         target.stop = { transport?.stop() }
         target.toggleLoop = { transport?.loops.toggle() }
+        target.toggleClick = { transport?.click.toggle() }
         target.selectAudio = {
             if let url = model.document?.url ?? library.audio.first(where: { !$0.isMissing })?.url { gatedSelection.wrappedValue = .audio(url) }
         }
@@ -323,15 +327,20 @@ struct ContentView: View {
     private var subtitle: String {
         if case .midi = selection {
             guard let editor = midiEditor else { return "" }
-            return Self.editorSubtitle(notes: editor.document.notes.count, tracks: editor.document.tracks.count, dirty: editor.document.isDirty)
+            return Self.editorSubtitle(notes: editor.document.notes.count, tracks: editor.document.tracks.count,
+                                       grid: editor.document.grid, dirty: editor.document.isDirty)
         }
         guard let document = model.document else { return "" }
         return String(format: "%.1f s · %@", document.duration, sampleRateText(document.sampleRate))
     }
 
-    /// `{n} notes · {k} tracks · 120 BPM 4/4`, plus ` · Edited` while there are unsaved changes.
-    static func editorSubtitle(notes: Int, tracks: Int, dirty: Bool) -> String {
-        "\(notes) \(notes == 1 ? "note" : "notes") \u{00B7} \(tracks) \(tracks == 1 ? "track" : "tracks") \u{00B7} 120 BPM 4/4"
+    /// `{n} notes · {k} tracks · {tempo} BPM {meter}`, plus the map and unsaved changes.
+    static func editorSubtitle(notes: Int, tracks: Int, grid: MIDIGrid, dirty: Bool) -> String {
+        let meter = grid.meters[0]
+        let changes = grid.meters.count - 1
+        let tempo = grid.bpm.formatted(.number.precision(.fractionLength(0...2)).locale(Locale(identifier: "en_US_POSIX")))
+        let map = changes > 0 ? " \u{00B7} \(changes) meter \(changes == 1 ? "change" : "changes")" : ""
+        return "\(notes) \(notes == 1 ? "note" : "notes") \u{00B7} \(tracks) \(tracks == 1 ? "track" : "tracks") \u{00B7} \(tempo) BPM \(meter.numerator)/\(meter.denominator)" + map
             + (dirty ? " \u{00B7} Edited" : "")
     }
 

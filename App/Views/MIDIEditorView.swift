@@ -98,6 +98,7 @@ final class MIDIEditorModel {
 
     /// Gives the engine the document's notes and the end of the last one as the loop end.
     func syncPlayback() {
+        playback.grid = document.grid
         playback.duration = document.notes.map(\.end).max() ?? 0
         playback.replace(notes: document.noteEvents)
         playback.setSilenced(silencedGroups)
@@ -170,7 +171,7 @@ struct MIDIEditorView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
                     Token.surfaceSunken.frame(width: Metric.keysW, height: Metric.rulerH)
-                    Canvas { context, size in RollDrawing.ruler(context, size, layout) }
+                    Canvas { context, size in RollDrawing.ruler(context, size, layout, grid: document.grid) }
                         .frame(height: Metric.rulerH).background(Token.surfaceSunken)
                         .gesture(SpatialTapGesture().onEnded { editor.playback.seek(to: layout.seconds(atX: $0.location.x)) })
                         .help("Click to move the playhead")
@@ -260,7 +261,7 @@ struct MIDIEditorView: View {
             ToolbarSpacer(.fixed)
             ToolbarItem {
                 ExportView(notes: document.noteEvents, entry: ModelCatalog.entry(id: editor.provenance?.modelID),
-                           slice: editor.exportSlice, name: editor.name, showNotice: $editor.showExport)
+                           slice: editor.exportSlice, name: editor.name, grid: document.grid, showNotice: $editor.showExport)
             }
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.fixed)
@@ -281,7 +282,7 @@ struct MIDIEditorView: View {
         var context = context
         context.translateBy(x: 0, y: -yOffset)
         let top = yOffset, bottom = yOffset + size.height
-        RollDrawing.grid(context, size, layout, pitches: Self.pitches, top: top, bottom: bottom)
+        RollDrawing.grid(context, size, layout, pitches: Self.pitches, top: top, bottom: bottom, grid: document.grid)
         for note in preview ?? document.notes where document.isVisible(note) {
             let rect = MIDIEditing.rect(of: note, in: layout)
             guard rect.maxX >= 0, rect.minX <= size.width, rect.maxY >= top, rect.minY <= bottom else { continue }
@@ -293,8 +294,9 @@ struct MIDIEditorView: View {
         guard let session else { return }
         switch session.mode {
         case .draw(let time, let pitch):
-            let length = MIDIEditing.drawLength(dragSeconds: dragSeconds(session), grid: document.snap)
-            let ghost = EditorNote(id: -1, track: document.drawTrackID, pitch: pitch, start: MIDIEditing.snapFloor(time, to: document.snap),
+            let length = MIDIEditing.drawLength(dragSeconds: dragSeconds(session), grid: document.snap, quarter: document.grid.secondsPerQuarter)
+            let ghost = EditorNote(id: -1, track: document.drawTrackID, pitch: pitch,
+                                   start: MIDIEditing.snapFloor(time, to: document.snap, quarter: document.grid.secondsPerQuarter),
                                    duration: length, velocity: MIDIEditing.defaultVelocity)
             RollDrawing.note(context, rect: MIDIEditing.rect(of: ghost, in: layout), color: editor.colour(for: ghost).opacity(0.7), selected: true)
         case .marquee where session.moved:
@@ -373,10 +375,14 @@ struct MIDIEditorView: View {
         case .move:
             if session.moved {
                 let steps = MIDIEditing.semitones(forDragY: location.y - session.start.y)
-                preview = MIDIEditing.move(document.notes, ids: session.ids, deltaTime: seconds, deltaPitch: steps, grid: document.snap)
+                preview = MIDIEditing.move(document.notes, ids: session.ids, deltaTime: seconds, deltaPitch: steps,
+                                           grid: document.snap, quarter: document.grid.secondsPerQuarter)
             }
         case .resize:
-            if session.moved { preview = MIDIEditing.resize(document.notes, ids: session.ids, delta: seconds, grid: document.snap) }
+            if session.moved {
+                preview = MIDIEditing.resize(document.notes, ids: session.ids, delta: seconds,
+                                             grid: document.snap, quarter: document.grid.secondsPerQuarter)
+            }
         case .erase:
             if let hit = MIDIEditing.hit(at: session.currentGrid, notes: document.notes, layout: layout, hiddenTracks: document.hiddenTracks) {
                 session.ids.insert(hit.id)
@@ -403,7 +409,8 @@ struct MIDIEditorView: View {
         case .resize:
             if session.moved { document.resize(session.ids, delta: seconds) }
         case .draw(let time, let pitch):
-            document.draw(at: time, pitch: pitch, length: MIDIEditing.drawLength(dragSeconds: seconds, grid: document.snap))
+            document.draw(at: time, pitch: pitch, length: MIDIEditing.drawLength(dragSeconds: seconds, grid: document.snap,
+                                                                                quarter: document.grid.secondsPerQuarter))
         case .erase:
             document.erase(session.ids)
         }
@@ -456,6 +463,8 @@ struct MIDIEditorView: View {
                 document.quantize()
             } else if character == "l" {
                 editor.playback.loops.toggle()
+            } else if character == "c" {
+                editor.playback.click.toggle()
             } else {
                 return .ignored
             }
@@ -494,7 +503,7 @@ private struct MIDIEditorFooterView: View {
 
     private var exportChip: some View {
         MIDIDragChip(notes: document.noteEvents, entry: ModelCatalog.entry(id: editor.provenance?.modelID),
-                     slice: editor.exportSlice, name: editor.name)
+                     slice: editor.exportSlice, name: editor.name, grid: document.grid)
     }
 
     private var summaryText: some View {
