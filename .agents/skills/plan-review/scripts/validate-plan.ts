@@ -649,6 +649,9 @@ export function inventoryState(
   const extra = new Set<string>(options.carry ?? []);
   let headRevision: string | null = null;
   const objects = new Map<string, Buffer>();
+  // A submodule is recorded as an opaque commit pointer: its pinned commit in HEAD and the
+  // index, and the commit checked out in its working directory. Its contents are never read.
+  const gitlinks = new Map<string, { head?: string; index?: string }>();
 
   if (inGit) {
     const rev = git(root, ["rev-parse", "--verify", "-q", "HEAD"]);
@@ -658,7 +661,11 @@ export function inventoryState(
         const tab = row.indexOf(9);
         const [mode, kind, oid] = row.subarray(0, tab).toString().split(" ");
         const path = row.subarray(tab + 1).toString("utf8");
-        if (kind !== "blob") throw new UnsupportedState(`HEAD entry ${path} is a ${kind}; submodules are unsupported`);
+        if (mode === "160000") {
+          gitlinks.set(path, { ...(gitlinks.get(path) ?? {}), head: oid });
+          continue;
+        }
+        if (kind !== "blob") throw new UnsupportedState(`HEAD entry ${path} is a ${kind}`);
         head.set(path, [mode, oid]);
         objects.set(oid, Buffer.alloc(0));
       }
@@ -668,7 +675,10 @@ export function inventoryState(
       const [mode, oid, stage] = row.subarray(0, tab).toString().split(" ");
       const path = row.subarray(tab + 1).toString("utf8");
       if (stage !== "0") throw new UnsupportedState(`index entry ${path} is unmerged (stage ${stage})`);
-      if (mode === "160000") throw new UnsupportedState(`index entry ${path} is a submodule`);
+      if (mode === "160000") {
+        gitlinks.set(path, { ...(gitlinks.get(path) ?? {}), index: oid });
+        continue;
+      }
       index.set(path, [mode, oid]);
       objects.set(oid, Buffer.alloc(0));
     }
@@ -695,13 +705,22 @@ export function inventoryState(
   }
   for (const inc of options.include ?? []) walkInclude(root, inc, extra);
 
-  const all = new Set<string>([...head.keys(), ...index.keys(), ...extra]);
+  const all = new Set<string>([...head.keys(), ...index.keys(), ...extra, ...gitlinks.keys()]);
   const paths = [...all].sort(byteCompare);
   const rows: PathRow[] = [];
   for (const path of paths) {
     const parts = path.split("/");
     if (isAbsolute(path) || parts.includes("..") || parts[0] === ".git") {
       throw new UnsupportedState(`path escapes the project or enters .git: ${path}`);
+    }
+    const link = gitlinks.get(path);
+    if (link) {
+      const pointer = (oid: string | undefined): Layer =>
+        oid === undefined ? { state: "absent" } : put(Buffer.from(`gitlink ${oid}\n`), "160000");
+      const sub = git(join(root, path), ["rev-parse", "--verify", "-q", "HEAD"]);
+      const checkedOut = sub.code === 0 && isGitRoot(join(root, path)) ? sub.out.toString().trim() : undefined;
+      rows.push({ path, head: pointer(link.head), index: pointer(link.index), worktree: pointer(checkedOut) });
+      continue;
     }
     const abs = join(root, path);
     let worktree: Layer;
