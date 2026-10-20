@@ -7,45 +7,6 @@ enum HandPercussionError: LocalizedError {
     var errorDescription: String? { "The hand percussion detector could not set up its spectrum analysis." }
 }
 
-/// A real-input FFT of one fixed size: the magnitudes of its first half.
-private final class RealFFT {
-    let size: Int
-    private let log2n: vDSP_Length
-    private let setup: FFTSetup
-    private var real: [Float]
-    private var imaginary: [Float]
-
-    init?(size: Int) {
-        self.size = size
-        log2n = vDSP_Length(size.trailingZeroBitCount)
-        guard size > 1, size & (size - 1) == 0, let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return nil }
-        self.setup = setup
-        real = [Float](repeating: 0, count: size / 2)
-        imaginary = [Float](repeating: 0, count: size / 2)
-    }
-
-    deinit { vDSP_destroy_fftsetup(setup) }
-
-    /// |DFT| of the `size` samples in `frame` for bins 0..<size/2. The Nyquist bin is left out.
-    func magnitudes(of frame: [Float], into out: inout [Float]) {
-        let half = size / 2
-        frame.withUnsafeBufferPointer { samples in
-            samples.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { packed in
-                real.withUnsafeMutableBufferPointer { re in
-                    imaginary.withUnsafeMutableBufferPointer { im in
-                        var split = DSPSplitComplex(realp: re.baseAddress!, imagp: im.baseAddress!)
-                        vDSP_ctoz(packed, 2, &split, 1, vDSP_Length(half))
-                        vDSP_fft_zrip(setup, &split, 1, log2n, FFTDirection(kFFTDirection_Forward))
-                    }
-                }
-            }
-        }
-        // vDSP's real transform is twice the DFT, and packs the Nyquist bin into the imaginary part of bin 0.
-        out[0] = abs(real[0]) / 2
-        for k in 1..<half { out[k] = (real[k] * real[k] + imaginary[k] * imaginary[k]).squareRoot() / 2 }
-    }
-}
-
 /// Finds the strokes of a hand drum, such as a darbuka or a doumbek, and labels each one low (doum) or high (tek, ka).
 ///
 /// This is signal processing, not a trained model: no open model for hand drums that may be used commercially exists.
@@ -89,35 +50,7 @@ struct HandPercussionEngine: Sendable {
 
     /// Positive change of the log spectrum from frame to frame, one value per frame of `hop` samples.
     static func flux(_ samples: [Float], progress: (Double) -> Void = { _ in }) throws -> [Float] {
-        let n = frameSize
-        let half = n / 2
-        guard let fft = RealFFT(size: n) else { throw HandPercussionError.fftUnavailable }
-        let frames = samples.count / hop + 1
-        // Frames are centred on every `hop`th sample, so half a frame of silence goes on each side.
-        let padded = [Float](repeating: 0, count: half) + samples + [Float](repeating: 0, count: n)
-        let window = (0..<n).map { 0.5 - 0.5 * cos(2 * Float.pi * Float($0) / Float(n)) }
-        let scale = 1 / Float(half)
-        var frame = [Float](repeating: 0, count: n)
-        var magnitude = [Float](repeating: 0, count: half)
-        var previous = [Float](repeating: 0, count: half)
-        var current = [Float](repeating: 0, count: half)
-        var flux = [Float](repeating: 0, count: frames)
-        for t in 0..<frames {
-            if t % 512 == 0 {
-                try Task.checkCancellation()
-                progress(Double(t) / Double(frames))
-            }
-            vDSP.multiply(padded[(t * hop)..<(t * hop + n)], window, result: &frame)
-            fft.magnitudes(of: frame, into: &magnitude)
-            for k in 0..<half { current[k] = log1pf(100 * magnitude[k] * scale) }
-            if t > 0 {
-                var rise: Float = 0
-                for k in 0..<half { rise += max(0, current[k] - previous[k]) }
-                flux[t] = rise
-            }
-            swap(&previous, &current)
-        }
-        return flux
+        try OnsetEnvelope.flux(samples, sampleRate: sampleRate, frameSize: frameSize, hop: hop, progress: progress)
     }
 
     /// The median of the `size` values around each one, reflecting at the ends.
