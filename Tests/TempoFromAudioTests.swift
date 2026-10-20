@@ -81,7 +81,6 @@ struct TempoFromAudioTests {
         let doums = try HandPercussionEngine().hits(samples: samples)
             .filter { $0.pitch == HandPercussionEngine.lowPitch }.map(\.time)
         let distances = doums.map { doum in result.beats.map { abs($0 - doum) }.min() ?? .infinity }
-        print("Maksum tempo: \(result.candidates); beats: \(result.beats); doums: \(doums); beat/doum offsets: \(distances)")
         #expect((try #require(result.candidates.first)).bpm > 80)
         #expect(result.beats.count >= 12)
         #expect(doums.count >= 6 && distances.allSatisfy { $0 < 0.03 })
