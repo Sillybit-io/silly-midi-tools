@@ -56,6 +56,11 @@ struct AudioInspectorView: View {
                 }
             }
             SliceFieldsSection(model: screen.document)
+            Section("Tempo") {
+                TempoFieldsView(grid: Binding(get: { screen.grid }, set: { screen.setGrid($0, actionName: "Change tempo and meter") }),
+                                showsMeterChanges: true)
+                TempoDetectionView(screen: screen)
+            }
             Section {
                 KeyView(notes: session.notes, fromAudio: screen.keyFromAudio, busy: screen.isDetectingKey, detect: screen.detectKeyFromAudio)
             } header: {

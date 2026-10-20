@@ -88,6 +88,30 @@ struct MIDIExportTests {
         }
     }
 
+    @Test func sheetAndDragExportCarryTheGridAtEitherSliceOrigin() throws {
+        var slice = AudioSlice(duration: 25)
+        slice.setStart(10.3)
+        let grid = MIDIGrid(bpm: 120, meters: [MeterChange(bar: 0, numerator: 4, denominator: 4),
+                                                MeterChange(bar: 4, numerator: 3, denominator: 4)])
+        for relative in [true, false] {
+            slice.relativeTimeline = relative
+            let item = MIDIExport.item(notes: [note(8, 9, 60)], entry: nil, slice: slice, name: "origin", grid: grid)
+            #expect(item.options.grid == grid)
+            let data = try MIDIBuilder.build(notes: item.notes, options: item.options)
+            let imported = try MIDIImporter.decode(data)
+            #expect(imported.grid == grid)
+            #expect(abs(imported.notes[0].start - (relative ? 8 : 18.3)) < 0.002)
+            let file = try parse(data)
+            let signatures = absoluteEvents(file.tracks[0], file).compactMap { item -> Int? in
+                if case .timeSignature = item.event { return item.tick }; return nil
+            }
+            #expect(signatures == [0, 7680])
+            #expect(absoluteEvents(file.tracks[1], file).contains { item in
+                if case .noteOn = item.event { return item.tick == (relative ? 7680 : 17568) }; return false
+            })
+        }
+    }
+
     @Test func copyrightEventPresentOnlyWhenRequested() throws {
         func copyrights(_ options: MIDIExportOptions) throws -> Int {
             let file = try parse(try MIDIBuilder.build(notes: [note(0, 1, 60)], options: options))

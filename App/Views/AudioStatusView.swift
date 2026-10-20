@@ -51,7 +51,7 @@ struct AudioStatusView: View {
         .background(Token.surfaceRaised, in: RoundedRectangle(cornerRadius: Metric.rRow))
         .overlay(RoundedRectangle(cornerRadius: Metric.rRow).strokeBorder(Token.border))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Transcription progress")
+        .accessibilityLabel(title.contains("beat") || title.contains("alignment") || title.contains("Beat This!") ? "Audio analysis progress" : "Transcription progress")
     }
 
     private func failed(_ title: String, _ message: String) -> some View {

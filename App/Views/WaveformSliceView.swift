@@ -32,6 +32,8 @@ extension AudioSlice {
 
 struct WaveformSliceView: View {
     @Bindable var model: DocumentModel
+    var grid: MIDIGrid? = nil
+    var beats: [(time: Double, isDownbeat: Bool)] = []
     /// Called with a time inside the slice when the track is clicked without dragging.
     var onSeek: (Double) -> Void = { _ in }
     @FocusState private var focusedEdge: AudioSlice.Edge?
@@ -137,6 +139,25 @@ struct WaveformSliceView: View {
             path.move(to: CGPoint(x: x, y: mid - CGFloat(peak.max) * mid))
             path.addLine(to: CGPoint(x: x, y: mid - CGFloat(peak.min) * mid))
             context.stroke(path, with: .color(x >= x0 && x <= x1 ? Token.waveSel : Token.wave), lineWidth: Metric.hairline)
+        }
+        let duration = model.slice.duration
+        guard duration > 0 else { return }
+        if let grid {
+            for line in RollDrawing.gridLines(grid: grid, from: 0, to: model.slice.span) {
+                let x = size.width * (model.slice.start + line.seconds) / duration
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: size.height))
+                context.stroke(path, with: .color(line.isBar ? Token.gridBar : Token.gridBeat),
+                               lineWidth: line.isBar ? 1.5 : Metric.hairline)
+            }
+        }
+        for beat in beats where beat.time >= model.slice.start && beat.time <= model.slice.end {
+            let x = size.width * beat.time / duration
+            var marker = Path()
+            marker.addEllipse(in: CGRect(x: x - (beat.isDownbeat ? 3 : 2), y: 2,
+                                         width: beat.isDownbeat ? 6 : 4, height: beat.isDownbeat ? 6 : 4))
+            context.fill(marker, with: .color(beat.isDownbeat ? Token.accentText : Token.gridBar))
         }
     }
 

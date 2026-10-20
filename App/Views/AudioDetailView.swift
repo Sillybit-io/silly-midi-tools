@@ -29,6 +29,71 @@ final class AudioScreenModel {
     let firstUse: FirstUseTranscription
     let writer = TranscriptionWriter()
     let playback = PlaybackEngine()
+    var undoManager = UndoManager()
+    private(set) var grid: MIDIGrid
+    @ObservationIgnored private let preferences: AppPreferences
+    private(set) var originMessage: String?
+    enum OriginResult: Equatable { case applied, unavailable }
+    @ObservationIgnored private var observedOrigin: Double
+    @ObservationIgnored private var observedSlice: AudioSlice
+
+    enum AnalysisOperation: Equatable { case quickTempo, beatThis, alignment, beatThisDownload }
+    struct AnalysisIdentity: Equatable, Sendable {
+        let source: URL
+        let start: Double
+        let end: Double
+        let noteRevision: Int
+        let resultIsCurrent: Bool
+    }
+    enum AnalysisValue: Sendable {
+        case quick(AudioTempoResult)
+        case beat(BeatThisResult)
+        case alignment(OnsetAlignmentResult?)
+    }
+    /// Injected workers make cancellation and late completions deterministic in tests.
+    @ObservationIgnored var analyzer: (@Sendable (AnalysisOperation, [Float], Double, [NoteEvent], URL?) async throws -> AnalysisValue)?
+    @ObservationIgnored private var worker: Task<Void, Never>?
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var noteRevision = 0
+    @ObservationIgnored private var observedNoteCount = 0
+    private(set) var analysisOperation: AnalysisOperation?
+    private(set) var failedAnalysis: (operation: AnalysisOperation, message: String)?
+    private(set) var analysisProgress = 0.0
+    private var quickResult: (identity: AnalysisIdentity, value: AudioTempoResult)?
+    private var beatResult: (identity: AnalysisIdentity, value: BeatThisResult)?
+    private var alignmentResult: (identity: AnalysisIdentity, value: OnsetAlignmentResult?)?
+
+    var analysisIdentity: AnalysisIdentity? {
+        guard let audio = document.document else { return nil }
+        return AnalysisIdentity(source: audio.url, start: document.slice.start, end: document.slice.end,
+                                noteRevision: noteRevision, resultIsCurrent: resultIsCurrent)
+    }
+    func notesChanged() {
+        guard observedNoteCount != session.notes.count else { return }
+        observedNoteCount = session.notes.count
+        noteRevision += 1
+        alignmentResult = nil
+        cancelAnalysis()
+    }
+    var currentQuickResult: AudioTempoResult? { quickResult?.identity == analysisIdentity ? quickResult?.value : nil }
+    var currentBeatResult: BeatThisResult? { beatResult?.identity == analysisIdentity ? beatResult?.value : nil }
+    var currentAlignment: OnsetAlignmentResult?? { alignmentResult?.identity == analysisIdentity ? alignmentResult?.value : nil }
+    var detectedBeats: [(time: Double, isDownbeat: Bool)] {
+        guard let identity = analysisIdentity else { return [] }
+        if let beat = currentBeatResult {
+            return beat.beats.map { pulse in (identity.start + pulse, beat.downbeats.contains { abs($0 - pulse) < 0.04 }) }
+        }
+        return (currentQuickResult?.beats ?? []).map { (identity.start + $0, false) }
+    }
+    var beatThisEntry: ModelEntry? { ModelCatalog.entry(id: ModelCatalog.beatThisID) }
+    var beatThisInstalled: Bool { beatThisEntry.flatMap { store.installedURL(for: $0) } != nil }
+    var canAnalyze: Bool { document.document != nil && !session.isBusy && !isPreparing && analysisOperation == nil && !otherRunInProgress() }
+    var analysisBlocker: String? {
+        if document.document == nil { return "Open audio to analyse its tempo." }
+        if session.isBusy || isPreparing || otherRunInProgress() { return "Wait for transcription or model preparation to finish." }
+        if analysisOperation != nil { return "Wait for the current analysis to finish, or cancel it." }
+        return nil
+    }
 
     var selectedModel: ModelEntry.ID? {
         didSet { downloadFailure = nil }
@@ -78,8 +143,13 @@ final class AudioScreenModel {
         self.destination = destination
         self.references = references
         self.onSaved = onSaved
+        self.preferences = preferences
+        grid = preferences.defaultGrid
+        observedOrigin = document.slice.start
+        observedSlice = document.slice
         firstUse = FirstUseTranscription(installer: store, settle: settle)
         selectedModel = preferences.defaultModelID
+        playback.grid = grid
         observeSession()
     }
 
@@ -107,6 +177,7 @@ final class AudioScreenModel {
         switch session.state {
         case .done, .cancelled:
             self.run = nil
+            noteRevision += 1
             writer.finish(session.state, notes: session.notes, run: run, folder: destination())
             debugLog(.library, "Result of \"\(run.title)\": \(writer.status)")
             if case .saved = writer.status { onSaved() }
@@ -120,6 +191,103 @@ final class AudioScreenModel {
     func retrySave() {
         writer.retry(folder: destination())
         if case .saved = writer.status { onSaved() }
+    }
+
+    /// Set once the slice origin moves after a run, and cleared only by a new run or another recording: the notes were
+    /// placed against the old origin, so undoing the move does not bring them back.
+    private(set) var resultInvalidated = false
+
+    var resultIsCurrent: Bool { ran != nil && !resultInvalidated && ran?.start == document.slice.start }
+    var usableNotes: [NoteEvent] { resultIsCurrent ? session.notes : [] }
+
+    func setGrid(_ new: MIDIGrid, actionName: String) {
+        guard grid != new else { return }
+        let previous = grid
+        undoManager.registerUndo(withTarget: self) { model in model.setGrid(previous, actionName: actionName) }
+        undoManager.setActionName(actionName)
+        grid = new
+        gridDidChange(from: previous, to: new)
+    }
+
+    func setBPM(_ bpm: Double) {
+        setGrid(MIDIGrid(bpm: bpm, meters: grid.meters), actionName: "Change tempo")
+    }
+
+    func addMeterChange() {
+        guard grid.meters.count < 256, let last = grid.meters.last, last.bar < Int.max else { return }
+        setGrid(MIDIGrid(bpm: grid.bpm, meters: grid.meters + [MeterChange(bar: last.bar + min(8, Int.max - last.bar),
+                                                                           numerator: last.numerator, denominator: last.denominator)]),
+                actionName: "Add meter change")
+    }
+
+    func removeMeterChange(at bar: Int) {
+        guard bar > 0, grid.meters.contains(where: { $0.bar == bar }) else { return }
+        setGrid(MIDIGrid(bpm: grid.bpm, meters: grid.meters.filter { $0.bar != bar }), actionName: "Remove meter change")
+    }
+
+    private func gridDidChange(from old: MIDIGrid, to new: MIDIGrid) {
+        playback.grid = new
+        run?.grid = new
+        writer.updatePendingGrid(new)
+        if resultIsCurrent, case .saved = writer.status {
+            if writer.regrid(to: new) == .updated { onSaved() }
+        }
+    }
+
+    /// Called for waveform slice changes as well as atomic origin actions. Stage 2 cancels slice-dependent analyses here.
+    func sliceChanged() {
+        guard observedSlice != document.slice else { return }
+        observedSlice = document.slice
+        // A helper download does not depend on the slice, so moving the slice leaves it running.
+        if analysisOperation != .beatThisDownload { cancelAnalysis() }
+        if failedAnalysis?.operation != .beatThisDownload { failedAnalysis = nil }
+        guard observedOrigin != document.slice.start else { return }
+        observedOrigin = document.slice.start
+        if session.isBusy || prepareTask != nil {
+            cancel()
+            sessionStateChanged()
+        }
+        if let ran, ran.start != document.slice.start { resultInvalidated = true }
+        writer.discardPending()
+        playback.replace(notes: usableNotes)
+    }
+
+    /// Changes the audio origin and optional meter together as one undo action, without reusing old-origin notes.
+    @discardableResult
+    func applyOrigin(absoluteStart requested: Double, grid newGrid: MIDIGrid?, actionName: String) -> OriginResult {
+        if session.isBusy || prepareTask != nil {
+            cancel()
+            sessionStateChanged()
+        }
+        let oldStart = document.slice.start
+        let oldGrid = grid
+        document.slice.setStart(requested)
+        guard requested.isFinite, abs(document.slice.start - requested) <= 0.010 else {
+            document.slice.setStart(oldStart)
+            originMessage = "Bar 1 would start too close to the end of the slice."
+            return .unavailable
+        }
+        originMessage = nil
+        let target = newGrid ?? grid
+        guard oldStart != document.slice.start || oldGrid != target else { return .applied }
+        undoManager.registerUndo(withTarget: self) { model in
+            _ = model.applyOrigin(absoluteStart: oldStart, grid: oldGrid, actionName: actionName)
+        }
+        undoManager.setActionName(actionName)
+        let moved = oldStart != document.slice.start
+        if moved { sliceChanged() }
+        if oldGrid != target {
+            grid = target
+            if moved {
+                playback.grid = target
+                run?.grid = target
+                writer.updatePendingGrid(target)
+            } else {
+                gridDidChange(from: oldGrid, to: target)
+            }
+        }
+        if moved { prepareOriginal() }
+        return .applied
     }
 
     var selectedEntry: ModelEntry? {
@@ -159,8 +327,9 @@ final class AudioScreenModel {
     }
 
     var summary: String {
-        Self.summary(state: session.state, noteCount: session.notes.count, instrumentCount: Set(session.notes.map(\.instrument)).count,
-                     ran: ran, changed: settingsChanged)
+        let text = Self.summary(state: session.state, noteCount: session.notes.count, instrumentCount: Set(session.notes.map(\.instrument)).count,
+                                ran: ran, changed: settingsChanged)
+        return ran != nil && !resultIsCurrent ? text + " · Bar 1 moved — transcribe again" : text
     }
 
     /// The footer's run summary, in the handoff's wording.
@@ -197,11 +366,12 @@ final class AudioScreenModel {
 
     /// Why Transcribe is unavailable even though a file is open, for its tooltip.
     var startBlocker: String? {
-        otherRunInProgress() ? "Another file is still being transcribed. Wait for it to finish, or open it and press Cancel." : nil
+        if analysisOperation != nil { return "Wait for the current audio analysis to finish, or cancel it." }
+        return otherRunInProgress() ? "Another file is still being transcribed. Wait for it to finish, or open it and press Cancel." : nil
     }
 
     var canStart: Bool {
-        guard document.document != nil, !session.isBusy, !isPreparing, !otherRunInProgress(), let entry = selectedEntry else { return false }
+        guard document.document != nil, !session.isBusy, !isPreparing, analysisOperation == nil, !otherRunInProgress(), let entry = selectedEntry else { return false }
         guard requiredModels(for: entry).allSatisfy({ store.state(for: $0) == .installed || $0.downloadURL != nil }) else { return false }
         return entry.engine != .muscriptor || engine != nil
     }
@@ -217,6 +387,27 @@ final class AudioScreenModel {
     }
 
     var runPanel: RunPanel? {
+        if let failedAnalysis, !failureDismissed {
+            let title: String
+            switch failedAnalysis.operation {
+            case .beatThisDownload: title = "Beat This! download failed"
+            case .alignment: title = "Alignment check failed"
+            case .quickTempo, .beatThis: title = "Beat analysis failed"
+            }
+            return .failed(title: title, message: failedAnalysis.message)
+        }
+        if let analysisOperation {
+            if analysisOperation == .beatThisDownload, let entry = beatThisEntry {
+                switch store.state(for: entry) {
+                case .downloading(let fraction): return .running(title: Self.downloadTitle(entry, fraction: fraction), steps: ["Download", "Verify SHA-256"], current: 0, fraction: fraction)
+                case .verifying: return .running(title: "Verifying Beat This!", steps: ["Download", "Verify SHA-256"], current: 1, fraction: nil)
+                default: return .running(title: Self.downloadTitle(entry, fraction: 0), steps: ["Download", "Verify SHA-256"], current: 0, fraction: nil)
+                }
+            }
+            let title = analysisOperation == .alignment ? "Checking alignment…" : "Finding the beat…"
+            return .running(title: title, steps: [analysisOperation == .alignment ? "Check alignment" : "Analyse audio"], current: 0,
+                            fraction: analysisOperation == .beatThis && analysisProgress > 0 ? analysisProgress : nil)
+        }
         if let failure = downloadFailure {
             return .failed(title: "Couldn\u{2019}t download \(failure.entry.displayName)", message: failure.message)
         }
@@ -282,6 +473,7 @@ final class AudioScreenModel {
 
     func prepareOriginal() {
         guard let audio = document.document else { return }
+        playback.grid = grid
         playback.duration = document.slice.span
         playback.setOriginal(samples: document.slice.cut(audio.samples, sampleRate: audio.sampleRate), sampleRate: audio.sampleRate)
     }
@@ -313,8 +505,15 @@ final class AudioScreenModel {
             cancel()
             sessionStateChanged()
         }
+        cancelAnalysis()
+        noteRevision += 1
+        quickResult = nil
+        beatResult = nil
+        alignmentResult = nil
+        failedAnalysis = nil
         run = nil
         ran = nil
+        resultInvalidated = false
         startedAt = nil
         includesDownload = nil
         downloadFailure = nil
@@ -323,7 +522,16 @@ final class AudioScreenModel {
         mutedInstruments = []
         writer.reset()
         session.clear()
+        observedNoteCount = 0
         clearKeyFromAudio()
+        // Stage 2 cancels detached tempo/alignment analysis here.
+        undoManager.removeAllActions(withTarget: self)
+        grid = preferences.defaultGrid
+        playback.grid = grid
+        observedOrigin = document.slice.start
+        observedSlice = document.slice
+        originMessage = nil
+        playback.replace(notes: [])
     }
 
     /// Ranks the keys of the selected slice of the audio itself.
@@ -341,6 +549,132 @@ final class AudioScreenModel {
     func dismissFailure() {
         downloadFailure = nil
         failureDismissed = true
+    }
+
+    func cancelCurrent() {
+        if analysisOperation != nil { cancelAnalysis() } else { cancel() }
+    }
+
+    func retryCurrent() {
+        if let failedAnalysis {
+            let operation = failedAnalysis.operation
+            self.failedAnalysis = nil
+            startAnalysis(operation)
+        } else { start() }
+    }
+
+    private func cancelAnalysis() {
+        generation += 1
+        worker?.cancel()
+        worker = nil
+        if analysisOperation == .beatThisDownload {
+            firstUse.answerConsent(false)
+            access.finish(agreed: false)
+        }
+        analysisOperation = nil
+    }
+
+    func startAnalysis(_ operation: AnalysisOperation) {
+        guard canAnalyze, let identity = analysisIdentity, let audio = audioForKey() else { return }
+        if operation == .alignment && (!resultIsCurrent || TempoFromNotes.mergedOnsets(usableNotes.map(\.onset)).count < 8) { return }
+        if operation == .beatThisDownload {
+            guard let entry = beatThisEntry, !beatThisInstalled else { return }
+            failedAnalysis = nil
+            failureDismissed = false
+            analysisOperation = operation
+            generation += 1
+            let request = generation
+            worker = Task { [weak self] in
+                guard let self else { return }
+                let outcome = await firstUse.prepare(entry)
+                guard request == generation else { return }
+                worker = nil
+                analysisOperation = nil
+                if case .failed(let message) = outcome { failedAnalysis = (operation, message) }
+            }
+            return
+        }
+        let modelURL = operation == .beatThis ? beatThisEntry.flatMap { store.installedURL(for: $0) } : nil
+        if operation == .beatThis && modelURL == nil { return }
+        let notes = usableNotes
+        let injected = analyzer
+        failedAnalysis = nil
+        failureDismissed = false
+        analysisOperation = operation
+        analysisProgress = 0
+        generation += 1
+        let request = generation
+        let samples = audio.samples
+        let rate = audio.rate
+        worker = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try Task.checkCancellation()
+                let value: AnalysisValue
+                if let injected { value = try await injected(operation, samples, rate, notes, modelURL) }
+                else {
+                    switch operation {
+                    case .quickTempo: value = .quick(try TempoFromAudio.detect(samples: samples, sampleRate: rate))
+                    case .alignment: value = .alignment(try OnsetAlignment.check(notes: notes, samples: samples, sampleRate: rate))
+                    case .beatThis:
+                        let result = try BeatThisEngine(modelURL: modelURL!).track(samples: samples, sampleRate: rate) { fraction in
+                            Task { @MainActor [weak self] in
+                                guard let self, request == self.generation else { return }
+                                self.analysisProgress = fraction
+                            }
+                        }
+                        value = .beat(result)
+                    case .beatThisDownload: return
+                    }
+                }
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard let self, request == self.generation else { return }
+                    self.worker = nil
+                    self.analysisOperation = nil
+                    guard self.analysisIdentity == identity else { return }
+                    switch value {
+                    case .quick(let result): self.quickResult = (identity, result)
+                    case .beat(let result): self.beatResult = (identity, result)
+                    case .alignment(let result): self.alignmentResult = (identity, result)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self, request == self.generation else { return }
+                    self.worker = nil
+                    self.analysisOperation = nil
+                    guard self.analysisIdentity == identity, !(error is CancellationError) else { return }
+                    self.failedAnalysis = (operation, error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    func detectTempoFromAudio() { startAnalysis(beatThisInstalled ? .beatThis : .quickTempo) }
+    func useTempoFromNotes(_ candidate: TempoCandidate) {
+        setGrid(MIDIGrid(bpm: candidate.bpm, meters: grid.meters), actionName: "Use tempo from notes")
+    }
+    func useTempoFromAudio(_ candidate: TempoCandidate) {
+        guard currentQuickResult?.candidates.contains(candidate) == true else { return }
+        setGrid(MIDIGrid(bpm: candidate.bpm * 4 / Double(grid.meters[0].denominator), meters: grid.meters), actionName: "Use tempo from audio")
+    }
+    func useBeatThisBPM() {
+        guard let beats = currentBeatResult?.beats, beats.count >= 2 else { return }
+        let periods = zip(beats, beats.dropFirst()).map { $1 - $0 }.sorted()
+        guard let middle = periods.indices.contains(periods.count / 2) ? periods[periods.count / 2] : nil, middle > 0 else { return }
+        let bpm = 60 / middle
+        setGrid(MIDIGrid(bpm: bpm * 4 / Double(grid.meters[0].denominator), meters: grid.meters), actionName: "Use tempo from audio")
+    }
+    var meterSuggestion: BeatThisMeterMap.Suggestion? {
+        currentBeatResult?.meterMap?.suggestion(denominator: grid.meters[0].denominator)
+    }
+    @discardableResult func useMeterMap() -> OriginResult {
+        guard let suggestion = meterSuggestion, let identity = analysisIdentity else { return .unavailable }
+        return applyOrigin(absoluteStart: identity.start + suggestion.firstDownbeatTime, grid: suggestion.grid, actionName: "Use meter map")
+    }
+    @discardableResult func startSliceAtFirstBeat() -> OriginResult {
+        guard let identity = analysisIdentity, let beat = currentBeatResult?.beats.first ?? currentQuickResult?.beats.first else { return .unavailable }
+        return applyOrigin(absoluteStart: identity.start + beat, grid: nil, actionName: "Start slice at first beat")
     }
 
     /// Stops a run, a download, or a wait on the first-use alert or the licence sheet.
@@ -394,9 +728,12 @@ final class AudioScreenModel {
     private func launch(_ entry: ModelEntry) {
         guard let audio = document.document else { return }
         run = TranscriptionWriter.Run(source: audio.url, sourceID: TranscriptionWriter.sourceIdentifier(for: audio.url, references: references()),
-                                      title: audio.name, modelID: entry.id, notice: entry.exportNotice, slice: document.slice)
+                                      title: audio.name, modelID: entry.id, notice: entry.exportNotice, slice: document.slice, grid: grid)
         ran = RunRecord(modelID: entry.id, modelName: entry.displayName, start: document.slice.start, end: document.slice.end,
                         instruments: chosenInstruments, estimatesVelocity: estimateVelocity, separatedDrums: usesSeparator, took: nil)
+        resultInvalidated = false
+        noteRevision += 1
+        alignmentResult = nil
         writer.reset()
         session.label = audio.url.lastPathComponent
         let samples = document.slice.cut(audio.samples, sampleRate: audio.sampleRate)
@@ -464,6 +801,7 @@ struct AudioDetailView: View {
     /// Opens a saved transcription in the MIDI editor.
     var onEditMIDI: (URL) -> Void = { _ in }
     @Environment(AppPreferences.self) private var preferences
+    @Environment(\.undoManager) private var windowUndoManager
     @FocusState private var focused: Bool
 
     private var model: DocumentModel { screen.document }
@@ -475,13 +813,13 @@ struct AudioDetailView: View {
             if let problem = screen.engineProblem {
                 Text(problem).foregroundStyle(Native.danger).padding(Metric.sp4)
             }
-            WaveformSliceView(model: model, onSeek: screen.seek)
+            WaveformSliceView(model: model, grid: screen.grid, beats: screen.detectedBeats, onSeek: screen.seek)
             AudioStatusView(panel: screen.runPanel, startedAt: screen.startedAt,
-                            onCancel: screen.cancel, onRetry: screen.start, onDismiss: screen.dismissFailure)
+                            onCancel: screen.cancelCurrent, onRetry: screen.retryCurrent, onDismiss: screen.dismissFailure)
                 .padding(.horizontal, Metric.sp6)
-            PianoRollView(notes: session.notes, duration: model.slice.span, finalizedThrough: session.finalizedThrough,
+            PianoRollView(notes: screen.usableNotes, duration: model.slice.span, finalizedThrough: session.finalizedThrough,
                           playhead: playback.position, hidden: screen.hiddenInstruments,
-                          pixelsPerSecond: $screen.pixelsPerSecond, follows: preferences.followPlayhead, onSeek: screen.seek,
+                          pixelsPerSecond: $screen.pixelsPerSecond, grid: screen.grid, follows: preferences.followPlayhead, onSeek: screen.seek,
                           neutralColour: screen.usesNeutralColour,
                           showsEmptyState: session.notes.isEmpty && session.state == .idle && !screen.isPreparing)
                 .onTapGesture { focused = true }
@@ -504,6 +842,8 @@ struct AudioDetailView: View {
                 screen.togglePlayback()
             } else if press.characters.lowercased() == "l" {
                 playback.loops.toggle()
+            } else if press.characters.lowercased() == "c" {
+                playback.click.toggle()
             } else {
                 return .ignored
             }
@@ -515,11 +855,20 @@ struct AudioDetailView: View {
         } message: {
             Text("The model file is downloaded once and kept on your Mac.")
         }
-        .onChange(of: session.notes.count) { playback.sync(notes: session.notes) }
+        .onChange(of: session.notes.count) {
+            screen.notesChanged()
+            playback.sync(notes: screen.usableNotes)
+        }
+        .onChange(of: windowUndoManager, initial: true) { _, manager in
+            if let manager, screen.undoManager !== manager { screen.undoManager = manager }
+        }
         .onChange(of: session.finalizedThrough) { playback.limit = session.isBusy ? session.finalizedThrough : nil }
         .onChange(of: session.state) { playback.limit = session.isBusy ? session.finalizedThrough : nil }
         // From the start, not only after the first Play, so the transport is sized for this audio before it plays.
-        .onChange(of: model.slice, initial: true) { playback.duration = model.slice.span }
+        .onChange(of: model.slice, initial: true) {
+            screen.sliceChanged()
+            playback.duration = model.slice.span
+        }
         .onChange(of: model.document?.url) { screen.documentChanged() }
         .onChange(of: screen.silencedGroups, initial: true) { _, groups in playback.setSilenced(groups) }
         .toolbar {
@@ -535,8 +884,9 @@ struct AudioDetailView: View {
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.fixed)
             ToolbarItem {
-                ExportView(notes: session.notes, entry: screen.selectedEntry,
-                           slice: model.slice, name: model.document?.name ?? "transcription", showNotice: $screen.showExport)
+                ExportView(notes: screen.usableNotes, entry: screen.selectedEntry,
+                           slice: model.slice, name: model.document?.name ?? "transcription", grid: screen.grid,
+                           showNotice: $screen.showExport)
             }
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.fixed)
@@ -594,8 +944,8 @@ struct AudioFooterView: View {
     }
 
     private var exportChip: some View {
-        MIDIDragChip(notes: screen.session.notes, entry: screen.selectedEntry, slice: screen.document.slice,
-                     name: screen.document.document?.name ?? "transcription")
+        MIDIDragChip(notes: screen.usableNotes, entry: screen.selectedEntry, slice: screen.document.slice,
+                     name: screen.document.document?.name ?? "transcription", grid: screen.grid)
     }
 
     private var summaryText: some View {
@@ -607,6 +957,8 @@ struct AudioFooterView: View {
                 }
             }
             saveLine
+            if let notice = screen.writer.notice { Text(notice).font(.caption).foregroundStyle(Native.danger) }
+            if let message = screen.originMessage { Text(message).font(.caption).foregroundStyle(Native.danger) }
             if let message = playback.lastError { Text(message).font(.caption).foregroundStyle(Native.danger) }
         }
     }

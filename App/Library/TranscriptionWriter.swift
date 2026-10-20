@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CryptoKit
 
 enum TranscriptionWriterError: LocalizedError, Equatable {
     case noFolder
@@ -26,6 +27,7 @@ final class TranscriptionWriter {
         var modelID: String?
         var notice: String?
         var slice: AudioSlice
+        var grid: MIDIGrid = .standard
     }
 
     enum Status: Equatable {
@@ -43,6 +45,17 @@ final class TranscriptionWriter {
     }
 
     private(set) var status: Status = .idle
+    private(set) var notice: String?
+    enum RegridResult: Equatable { case updated, notUpdated }
+    private struct SavedRun {
+        let url: URL
+        let version: Int
+        let partial: Bool
+        let notes: [NoteEvent]
+        var run: Run
+        var digest: SHA256.Digest
+    }
+    @ObservationIgnored private var lastSaved: SavedRun?
     @ObservationIgnored private var pending: (notes: [NoteEvent], run: Run, partial: Bool)?
     @ObservationIgnored private let fileManager: FileManager
 
@@ -74,9 +87,66 @@ final class TranscriptionWriter {
         save(pending.notes, run: pending.run, partial: pending.partial, folder: folder)
     }
 
+    /// Keeps a failed first save in step with user edits without changing its captured slice.
+    func updatePendingGrid(_ grid: MIDIGrid) {
+        guard case .failed = status, var pending else { return }
+        pending.run.grid = grid
+        self.pending = pending
+    }
+
+    func discardPending() {
+        guard case .failed = status else { return }
+        pending = nil
+        status = .idle
+    }
+
+    @discardableResult
+    func regrid(to grid: MIDIGrid) -> RegridResult {
+        let changed = "The saved file was changed outside the app, so it was left as it is."
+        guard case .saved(let url, let version, let partial) = status,
+              var saved = lastSaved, saved.url == url, saved.version == version, saved.partial == partial else {
+            notice = "There is no current saved result to update."
+            return .notUpdated
+        }
+        guard let original = try? Data(contentsOf: url), SHA256.hash(data: original) == saved.digest,
+              let provenance = try? MIDIImporter.decode(original).provenance,
+              provenance.source == saved.run.sourceID, provenance.modelID == saved.run.modelID,
+              provenance.version == version, provenance.sourceName == saved.run.title,
+              provenance.partial == partial, !provenance.edited else {
+            notice = changed
+            return .notUpdated
+        }
+        var updatedRun = saved.run
+        updatedRun.grid = grid
+        let staging = url.deletingLastPathComponent().appending(path: ".regrid-\(UUID().uuidString).tmp")
+        defer { try? fileManager.removeItem(at: staging) }
+        do {
+            var options = Self.options(for: updatedRun, version: version, partial: partial)
+            options.grid = grid
+            let data = try MIDIBuilder.build(notes: saved.notes, options: options)
+            try data.write(to: staging)
+            // Check again after staging, just before replacement; an external edit must win.
+            guard let current = try? Data(contentsOf: url), SHA256.hash(data: current) == saved.digest else {
+                notice = changed
+                return .notUpdated
+            }
+            _ = try fileManager.replaceItemAt(url, withItemAt: staging)
+            saved.run = updatedRun
+            saved.digest = SHA256.hash(data: data)
+            lastSaved = saved
+            notice = nil
+            return .updated
+        } catch {
+            notice = "The saved file could not be updated. It was left as it is."
+            return .notUpdated
+        }
+    }
+
     func reset() {
         status = .idle
         pending = nil
+        lastSaved = nil
+        notice = nil
     }
 
     private func save(_ notes: [NoteEvent], run: Run, partial: Bool, folder: URL?) {
@@ -91,11 +161,15 @@ final class TranscriptionWriter {
             return
         }
         do {
-            switch try Self.write(notes, run: run, partial: partial, in: folder, fileManager: fileManager) {
-            case .saved(let url, let version): status = .saved(url, version: version, partial: partial)
+            let result = try Self.writeWithDigest(notes, run: run, partial: partial, in: folder, fileManager: fileManager)
+            switch result.outcome {
+            case .saved(let url, let version):
+                status = .saved(url, version: version, partial: partial)
+                if let digest = result.digest { lastSaved = SavedRun(url: url, version: version, partial: partial, notes: notes, run: run, digest: digest) }
             case .kept(let url, let version): status = .keptPrevious(url, version: version)
             }
             pending = nil
+            notice = nil
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -139,10 +213,28 @@ final class TranscriptionWriter {
     /// its version. A cancelled run leaves a finished result of the same model in place and writes nothing.
     /// A finished result, a file with hand edits, and one that isn't recognisably this source's are never touched.
     nonisolated static func write(_ notes: [NoteEvent], run: Run, partial: Bool, in folder: URL, fileManager: FileManager = .default) throws -> Outcome {
+        try writeWithDigest(notes, run: run, partial: partial, in: folder, fileManager: fileManager).outcome
+    }
+
+    nonisolated private static func options(for run: Run, version: Int, partial: Bool) -> MIDIExportOptions {
+        var options = MIDIExportOptions()
+        options.title = run.title
+        options.sliceStart = run.slice.start
+        options.sliceLength = run.slice.span
+        options.relativeTimeline = run.slice.relativeTimeline
+        options.grid = run.grid
+        options.copyright = run.notice
+        options.provenance = MIDIProvenance(source: run.sourceID, sourceName: run.title, modelID: run.modelID, version: version,
+                                            edited: false, partial: partial)
+        return options
+    }
+
+    nonisolated private static func writeWithDigest(_ notes: [NoteEvent], run: Run, partial: Bool, in folder: URL,
+                                                    fileManager: FileManager) throws -> (outcome: Outcome, digest: SHA256.Digest?) {
         let linked = linkedOutputs(sourceID: run.sourceID, in: folder, fileManager: fileManager)
         let sameModel = linked.filter { $0.provenance.modelID == run.modelID && !$0.provenance.edited }
         if partial, let complete = sameModel.first(where: { !$0.provenance.partial }) {
-            return .kept(complete.url, version: complete.provenance.version)
+            return (.kept(complete.url, version: complete.provenance.version), nil)
         }
         let unfinished = sameModel.first { $0.provenance.partial }
         let destination = unfinished?.url
@@ -150,14 +242,7 @@ final class TranscriptionWriter {
         let version = unfinished?.provenance.version ?? nextVersion(after: linked)
         let name = destination.lastPathComponent
 
-        var options = MIDIExportOptions()
-        options.title = run.title
-        options.sliceStart = run.slice.start
-        options.sliceLength = run.slice.span
-        options.relativeTimeline = run.slice.relativeTimeline
-        options.copyright = run.notice
-        options.provenance = MIDIProvenance(source: run.sourceID, sourceName: run.title, modelID: run.modelID, version: version,
-                                            edited: false, partial: partial)
+        let options = options(for: run, version: version, partial: partial)
 
         let staging = folder.appending(path: ".save-\(UUID().uuidString).tmp", directoryHint: .notDirectory)
         do {
@@ -168,11 +253,11 @@ final class TranscriptionWriter {
             } else {
                 try fileManager.moveItem(at: staging, to: destination)
             }
+            return (.saved(destination, version: version), SHA256.hash(data: data))
         } catch {
             try? fileManager.removeItem(at: staging)
             throw TranscriptionWriterError.cannotWrite(file: name, reason: reason(for: error))
         }
-        return .saved(destination, version: version)
     }
 
     nonisolated static func reason(for error: Error) -> String {

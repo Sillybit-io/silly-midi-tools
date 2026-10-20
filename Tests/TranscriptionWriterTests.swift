@@ -311,6 +311,70 @@ struct TranscriptionWriterTests {
         #expect(writer.status == .saved(folder.appending(path: first), version: 1, partial: false))
     }
 
+    @Test func regridRewritesTheSameVersionAndRefreshesItsDigestOnlyAfterSuccess() throws {
+        let folder = try scratchFolder()
+        var run = makeRun()
+        run.grid = MIDIGrid(bpm: 95, numerator: 3, denominator: 4)
+        let notes = [note(0.4, 1.1, 60), note(1.2, 1.9, 64)]
+        writer.finish(.done(notes.count), notes: notes, run: run, folder: folder)
+        let url = folder.appending(path: first)
+        let status = writer.status
+        #expect(writer.regrid(to: MIDIGrid(bpm: 92, numerator: 3, denominator: 4)) == .updated)
+        #expect(writer.status == status)
+        let imported = try MIDIImporter.decode(Data(contentsOf: url))
+        #expect(imported.grid == MIDIGrid(bpm: 92, numerator: 3, denominator: 4))
+        #expect(zip(imported.notes.map(\.start), [0.4, 1.2]).allSatisfy { abs($0 - $1) < 0.002 })
+        #expect(imported.provenance?.version == 1 && imported.provenance?.edited == false)
+        #expect(writer.notice == nil)
+        #expect(writer.regrid(to: MIDIGrid(bpm: 90, numerator: 3, denominator: 4)) == .updated)
+        #expect(try MIDIImporter.decode(Data(contentsOf: url)).grid.bpm == 90)
+
+        var external = MIDIExportOptions()
+        external.grid = MIDIGrid(bpm: 90, numerator: 3, denominator: 4)
+        external.title = run.title
+        external.sliceLength = run.slice.span
+        external.copyright = run.notice
+        external.provenance = imported.provenance
+        try MIDIBuilder.build(notes: [note(0.4, 1.1, 72)], options: external).write(to: url)
+        let altered = try sha(url)
+        #expect(MIDIImporter.info(at: url)?.provenance == imported.provenance)
+        #expect(writer.regrid(to: MIDIGrid(bpm: 88, numerator: 3, denominator: 4)) == .notUpdated)
+        #expect(try sha(url) == altered)
+        #expect(writer.status == status && writer.notice != nil)
+    }
+
+    @Test func pendingRetryUsesLatestGridAndAnOriginInvalidationDiscardsIt() throws {
+        var run = makeRun()
+        run.grid = MIDIGrid(bpm: 95, numerator: 3, denominator: 4)
+        writer.finish(.done(1), notes: [note(0, 1, 60)], run: run, folder: nil)
+        writer.updatePendingGrid(MIDIGrid(bpm: 92, numerator: 3, denominator: 4))
+        let folder = try scratchFolder()
+        writer.retry(folder: folder)
+        #expect(try MIDIImporter.decode(Data(contentsOf: folder.appending(path: first))).grid.bpm == 92)
+        writer.reset()
+        writer.finish(.done(1), notes: [note(0, 1, 60)], run: run, folder: nil)
+        writer.discardPending()
+        writer.retry(folder: folder)
+        #expect(writer.status == .idle)
+    }
+
+    @Test func failedReplacementDoesNotChangeTheSavedIdentityOrFile() throws {
+        let folder = try scratchFolder()
+        var run = makeRun()
+        run.grid = MIDIGrid(bpm: 95, numerator: 3, denominator: 4)
+        writer.finish(.done(1), notes: [note(0, 1, 60)], run: run, folder: folder)
+        let url = folder.appending(path: first)
+        let before = try sha(url)
+        let status = writer.status
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        #expect(writer.regrid(to: MIDIGrid(bpm: 92, numerator: 3, denominator: 4)) == .notUpdated)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        #expect(try sha(url) == before)
+        #expect(writer.status == status && writer.notice != nil)
+        #expect(writer.regrid(to: MIDIGrid(bpm: 90, numerator: 3, denominator: 4)) == .updated)
+        #expect(try MIDIImporter.decode(Data(contentsOf: url)).grid.bpm == 90)
+    }
+
     @Test func aSourceIsIdentifiedByItsBookmarkOrItsNameNeverItsPath() {
         let url = URL(fileURLWithPath: "/Users/someone/Music/take.wav")
         let reference = AudioReference(name: "take.wav", lastPath: url.path, bookmark: Data())

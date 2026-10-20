@@ -12,8 +12,9 @@ enum MIDIExport {
     }
 
     static func item(notes: [NoteEvent], entry: ModelEntry?, slice: AudioSlice, name: String,
-                     embedNotice: Bool = false, pitchBends: Bool = false, keyInName: Bool = true) -> MIDIExportItem {
+                     grid: MIDIGrid = .standard, embedNotice: Bool = false, pitchBends: Bool = false, keyInName: Bool = true) -> MIDIExportItem {
         var options = MIDIExportOptions()
+        options.grid = grid
         options.sliceStart = slice.start
         options.sliceLength = slice.span
         options.relativeTimeline = slice.relativeTimeline
@@ -35,6 +36,7 @@ struct ExportView: View {
     let entry: ModelEntry?
     let slice: AudioSlice
     let name: String
+    var grid: MIDIGrid = .standard
 
     @Binding var showNotice: Bool
     @State private var embedNotice = true
@@ -70,7 +72,7 @@ struct ExportView: View {
                     Spacer()
                     Button("Cancel") { showNotice = false }
                     Button("Export") {
-                        item = MIDIExport.item(notes: notes, entry: entry, slice: slice, name: name,
+                        item = MIDIExport.item(notes: notes, entry: entry, slice: slice, name: name, grid: grid,
                                                embedNotice: embedNotice, pitchBends: pitchBends, keyInName: keyInName)
                         showNotice = false
                         exporting = true
@@ -101,6 +103,7 @@ struct MIDIDragChip: View {
     let entry: ModelEntry?
     let slice: AudioSlice
     let name: String
+    var grid: MIDIGrid = .standard
 
     @State private var hovering = false
 
@@ -126,7 +129,7 @@ struct MIDIDragChip: View {
             .contentShape(shape)
             .onHover { hovering = $0 }
             .pointerStyle(.grabIdle)
-            .draggable(MIDIExport.item(notes: notes, entry: entry, slice: slice, name: name)) {
+            .draggable(MIDIExport.item(notes: notes, entry: entry, slice: slice, name: name, grid: grid)) {
                 Label {
                     Text(file)
                 } icon: {
