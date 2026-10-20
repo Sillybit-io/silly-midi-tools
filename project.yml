@@ -52,8 +52,8 @@ targets:
       properties:
         CFBundleDisplayName: Silly MIDI Tools
         CFBundleName: Silly MIDI Tools
-        CFBundleShortVersionString: "0.6.3"
-        CFBundleVersion: "10"
+        CFBundleShortVersionString: "0.7.0"
+        CFBundleVersion: "11"
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.music
         NSHumanReadableCopyright: "© 2026 Sillybit"
