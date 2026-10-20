@@ -40,7 +40,9 @@ struct DrumSeparatorTests {
     @Test func theSeparatorIsAHelperNotAChoiceOfTranscriber() throws {
         let entry = try #require(ModelCatalog.entry(id: ModelCatalog.separatorID))
         #expect(!entry.transcribes && entry.needsDownload && !entry.requiresAcceptance)
-        #expect(ModelCatalog.entries.filter(\.transcribes).count == ModelCatalog.entries.count - 1)
+        // The beat tracker is the other helper: downloaded and listed, never picked to transcribe with.
+        #expect(ModelCatalog.entries.filter { !$0.transcribes }.map(\.id).sorted() == [ModelCatalog.beatThisID, ModelCatalog.separatorID].sorted())
+        #expect(ModelCatalog.entries.filter(\.transcribes).count == ModelCatalog.entries.count - 2)
     }
 
     @Test(.enabled(if: separatorAvailable))
