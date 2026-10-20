@@ -17,6 +17,7 @@ struct SettingsPreferencesTests {
         #expect(preferences.addAudioMode == .copy)
         #expect(preferences.followPlayhead)
         #expect(preferences.appearance.colorScheme == nil)
+        #expect(preferences.defaultGrid == .standard)
     }
 
     @Test func debugLoggingStartsOffAndIsRemembered() {
@@ -41,12 +42,14 @@ struct SettingsPreferencesTests {
         first.addAudioMode = .reference
         first.followPlayhead = false
         first.defaultModelID = "piano-onnx"
+        first.defaultGrid = MIDIGrid(bpm: 95, numerator: 3, denominator: 4)
 
         let relaunched = AppPreferences(defaults: defaults)
         #expect(relaunched.appearance == .dark)
         #expect(relaunched.addAudioMode == .reference)
         #expect(!relaunched.followPlayhead)
         #expect(relaunched.defaultModelID == "piano-onnx")
+        #expect(relaunched.defaultGrid == MIDIGrid(bpm: 95, numerator: 3, denominator: 4))
     }
 
     @Test func unreadableStoredValuesFallBack() {
@@ -55,10 +58,31 @@ struct SettingsPreferencesTests {
         defaults.set("sepia", forKey: AppPreferences.appearanceKey)
         defaults.set("teleport", forKey: AppPreferences.addAudioModeKey)
         defaults.set("gone", forKey: AppPreferences.defaultModelKey)
+        defaults.set("unreadable", forKey: AppPreferences.defaultBPMKey)
+        defaults.set("unreadable", forKey: AppPreferences.defaultTimeSignatureNumeratorKey)
+        defaults.set("unreadable", forKey: AppPreferences.defaultTimeSignatureDenominatorKey)
         let preferences = AppPreferences(defaults: defaults)
         #expect(preferences.appearance == .automatic)
         #expect(preferences.addAudioMode == .copy)
         #expect(preferences.defaultModelID == "basic-pitch")
+        #expect(preferences.defaultGrid == .standard)
+    }
+
+    @Test func wildStoredTempoIsClamped() {
+        let (defaults, cleanup) = suite()
+        defer { cleanup() }
+        defaults.set(5000, forKey: AppPreferences.defaultBPMKey)
+        #expect(AppPreferences(defaults: defaults).defaultGrid.bpm == 300)
+    }
+
+    @Test func settingsKeepOnlyTheFirstMeter() {
+        let (defaults, cleanup) = suite()
+        defer { cleanup() }
+        let preferences = AppPreferences(defaults: defaults)
+        preferences.defaultGrid = MIDIGrid(bpm: 95, meters: [MeterChange(bar: 0, numerator: 3, denominator: 4),
+                                                              MeterChange(bar: 8, numerator: 6, denominator: 8)])
+        #expect(preferences.defaultGrid == MIDIGrid(bpm: 95, numerator: 3, denominator: 4))
+        #expect(AppPreferences(defaults: defaults).defaultGrid == preferences.defaultGrid)
     }
 
     private func installedStore() throws -> (ModelStore, ModelEntry, URL) {

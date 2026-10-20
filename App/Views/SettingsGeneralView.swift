@@ -52,10 +52,15 @@ struct SettingsGeneralView: View {
                     ForEach(ModelCatalog.entries.filter(\.transcribes)) { Text($0.displayName).tag($0.id) }
                 }
             }
-            Section("Playback and files") {
+            Section {
                 LabeledContent("Sound", value: "General MIDI")
                 Toggle("Scroll piano roll to follow playhead", isOn: $preferences.followPlayhead)
-                LabeledContent("MIDI file", value: "Type 1 · 120 BPM · 4/4")
+                TempoFieldsView(grid: $preferences.defaultGrid, showsMeterChanges: false)
+                LabeledContent("MIDI file", value: "Type 1")
+            } header: {
+                Text("Playback and files")
+            } footer: {
+                Text("New transcriptions start with this tempo and time signature.")
             }
             Section {
                 Toggle("Save debug logs", isOn: $preferences.debugLogging)
