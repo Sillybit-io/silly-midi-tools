@@ -52,7 +52,7 @@ Unknown product choices belong to the owner and become questions. Unread files a
 
 ## Checkpoints and resume
 
-When the session may end before closure, write the draft with everything gathered: citations, coverage rows, the frontier, and the next action. Keep `status: draft`.
+The plan file exists from the skeleton step on, and each citation, coverage row, and frontier item was appended as you found it, so the draft is already current. Before the session ends, append the frontier items and the next action, one block each. Keep `status: draft`.
 
 On resume, re-read the draft from disk. Recompute the SHA-256 of every cited source. When a source changed, re-read its cited lines and update the excerpt, or record the change. Then work the frontier before anything else, even when `## Research` and `## Questions` are already filled. New evidence can add seeds. Research and questions repeat when that evidence demands it.
 

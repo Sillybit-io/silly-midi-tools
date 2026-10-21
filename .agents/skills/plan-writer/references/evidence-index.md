@@ -15,6 +15,20 @@ Read this file when you write `### Evidence index` under Scope, and again before
 }
 ```
 
+## Appending entries
+
+Do not write or rewrite the index as one large object. Under `### Evidence index`, the skeleton holds one block with `schemaVersion`, `baseline`, and empty arrays. Add each citation, coverage row, frontier item, or flow as its own fenced `json` block directly below, holding only that key:
+
+````markdown
+```json
+{ "citations": [{ "id": "C7", "kind": "source", "path": "src/app.ts", "startLine": 10, "endLine": 12, "excerpt": "...", "sha256": "..." }] }
+```
+````
+
+The validator merges every block under the heading: arrays concatenate, `baseline` merges one level deep (its `checks` arrays concatenate), and any other later key replaces an earlier one. A duplicate citation or flow id across blocks is still an error. Insert each new block above `## Research`, so the anchor is unique. A plan with one big block stays valid.
+
+Appending only adds. It never updates: a coverage row `V1` appended as `inspected` after an earlier `V1` that is `pending` leaves both rows, and the pending one still fails validation once the plan is `planned`. So change an entry that already exists in place. Resolve a pending coverage row by editing its `state` and `citationIds` where it sits. Resolve a frontier item by deleting its entry. Refresh a citation's `excerpt` and `sha256` on resume, record an owner's answer, or fix a review finding the same way, touching only the fields that change. Never rewrite a whole block or the whole index to do it.
+
 ## Citations
 
 Every backticked `path:line` or `path:start-end` in the plan, outside code fences, must fall inside a citation for the same path. Several prose references can share one citation.

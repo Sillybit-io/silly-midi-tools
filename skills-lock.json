@@ -65,7 +65,7 @@
       "source": "Sillybit-io/silly-skills",
       "sourceType": "github",
       "skillPath": "skills/planning/plan-review/SKILL.md",
-      "computedHash": "4e0e5961dd278ae10f3ec456641cc9a1d3f624c2e5323011776e4ddd20e952ff"
+      "computedHash": "4c430ab783a79ad860a81130fad420761221782b68f49b12cc9d3c7be624c17d"
     },
     "plan-scout": {
       "source": "Sillybit-io/silly-skills",
@@ -77,7 +77,7 @@
       "source": "Sillybit-io/silly-skills",
       "sourceType": "github",
       "skillPath": "skills/planning/plan-writer/SKILL.md",
-      "computedHash": "e7cd0ed5a030f9bbc636a945860d3131803bd9489d328761c164fb175fcc4b87"
+      "computedHash": "efb2fe11e6041a370e0e36628a2e5206b191de8a99e41e68186f147c2ebfc58c"
     },
     "pr-description": {
       "source": "Sillybit-io/silly-skills",
