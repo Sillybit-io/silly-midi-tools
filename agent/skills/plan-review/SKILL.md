@@ -9,7 +9,7 @@ description: Reviews implementation plans against repository evidence and
   earlier approval, or asking for the plan-review verdict.
 license: CC-BY-ND-4.0
 metadata:
-  version: 0.5.0
+  version: 0.6.0
   category: planning
   suggested-model: openai/gpt-6-astra
   suggested-effort: max

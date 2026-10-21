@@ -302,6 +302,49 @@ function fencedJson(
   return null;
 }
 
+/** Merges every fenced json block in the range into one object, so a writer can
+ * append one small block per entry. Arrays concatenate, nested objects merge one
+ * level deep, and any other later value replaces an earlier one. A single block
+ * is returned as it is. */
+function fencedJsonBlocks(
+  lines: Line[],
+  from: number,
+  to: number,
+): { value: unknown; no: number } | { error: string; no: number } | null {
+  const blocks: unknown[] = [];
+  let first = 0;
+  for (let i = from; i < to; i++) {
+    const line = lines[i];
+    if (!line.fenceMarker || line.fenceInfo !== "json") continue;
+    const found = fencedJson(lines, i, to);
+    if (found === null) break;
+    if ("error" in found) return found;
+    if (blocks.length === 0) first = found.no;
+    blocks.push(found.value);
+    const close = lines.findIndex((l, k) => k > i && l.fenceMarker && k < to);
+    if (close < 0) break;
+    i = close;
+  }
+  if (blocks.length === 0) return null;
+  if (blocks.length === 1) return { value: blocks[0], no: first };
+  const merged: Record<string, unknown> = {};
+  for (const block of blocks) {
+    if (!isObject(block)) return { error: "every Evidence index block must be a JSON object", no: first };
+    for (const [key, next] of Object.entries(block)) {
+      const prev = merged[key];
+      if (Array.isArray(prev) && Array.isArray(next)) merged[key] = [...prev, ...next];
+      else if (isObject(prev) && isObject(next)) {
+        const inner: Record<string, unknown> = { ...prev };
+        for (const [k, v] of Object.entries(next)) {
+          inner[k] = Array.isArray(inner[k]) && Array.isArray(v) ? [...(inner[k] as unknown[]), ...v] : v;
+        }
+        merged[key] = inner;
+      } else merged[key] = next;
+    }
+  }
+  return { value: merged, no: first };
+}
+
 /* ── plan model ────────────────────────────────────────────────────────────── */
 
 export type Todo = {
@@ -406,7 +449,7 @@ export function parsePlan(text: string): ParsedPlan {
     plan.mustHave = ids("Must have", "MH");
     plan.mustNotHave = ids("Must NOT have", "MN");
     const index = subs.find((s) => s.title === "Evidence index");
-    if (index) plan.evidenceIndex = fencedJson(lines, index.start, index.end);
+    if (index) plan.evidenceIndex = fencedJsonBlocks(lines, index.start, index.end);
   }
 
   const todos = section(plan, "Todos");
@@ -649,9 +692,6 @@ export function inventoryState(
   const extra = new Set<string>(options.carry ?? []);
   let headRevision: string | null = null;
   const objects = new Map<string, Buffer>();
-  // A submodule is recorded as an opaque commit pointer: its pinned commit in HEAD and the
-  // index, and the commit checked out in its working directory. Its contents are never read.
-  const gitlinks = new Map<string, { head?: string; index?: string }>();
 
   if (inGit) {
     const rev = git(root, ["rev-parse", "--verify", "-q", "HEAD"]);
@@ -661,11 +701,7 @@ export function inventoryState(
         const tab = row.indexOf(9);
         const [mode, kind, oid] = row.subarray(0, tab).toString().split(" ");
         const path = row.subarray(tab + 1).toString("utf8");
-        if (mode === "160000") {
-          gitlinks.set(path, { ...(gitlinks.get(path) ?? {}), head: oid });
-          continue;
-        }
-        if (kind !== "blob") throw new UnsupportedState(`HEAD entry ${path} is a ${kind}`);
+        if (kind !== "blob") throw new UnsupportedState(`HEAD entry ${path} is a ${kind}; submodules are unsupported`);
         head.set(path, [mode, oid]);
         objects.set(oid, Buffer.alloc(0));
       }
@@ -675,10 +711,7 @@ export function inventoryState(
       const [mode, oid, stage] = row.subarray(0, tab).toString().split(" ");
       const path = row.subarray(tab + 1).toString("utf8");
       if (stage !== "0") throw new UnsupportedState(`index entry ${path} is unmerged (stage ${stage})`);
-      if (mode === "160000") {
-        gitlinks.set(path, { ...(gitlinks.get(path) ?? {}), index: oid });
-        continue;
-      }
+      if (mode === "160000") throw new UnsupportedState(`index entry ${path} is a submodule`);
       index.set(path, [mode, oid]);
       objects.set(oid, Buffer.alloc(0));
     }
@@ -705,22 +738,13 @@ export function inventoryState(
   }
   for (const inc of options.include ?? []) walkInclude(root, inc, extra);
 
-  const all = new Set<string>([...head.keys(), ...index.keys(), ...extra, ...gitlinks.keys()]);
+  const all = new Set<string>([...head.keys(), ...index.keys(), ...extra]);
   const paths = [...all].sort(byteCompare);
   const rows: PathRow[] = [];
   for (const path of paths) {
     const parts = path.split("/");
     if (isAbsolute(path) || parts.includes("..") || parts[0] === ".git") {
       throw new UnsupportedState(`path escapes the project or enters .git: ${path}`);
-    }
-    const link = gitlinks.get(path);
-    if (link) {
-      const pointer = (oid: string | undefined): Layer =>
-        oid === undefined ? { state: "absent" } : put(Buffer.from(`gitlink ${oid}\n`), "160000");
-      const sub = git(join(root, path), ["rev-parse", "--verify", "-q", "HEAD"]);
-      const checkedOut = sub.code === 0 && isGitRoot(join(root, path)) ? sub.out.toString().trim() : undefined;
-      rows.push({ path, head: pointer(link.head), index: pointer(link.index), worktree: pointer(checkedOut) });
-      continue;
     }
     const abs = join(root, path);
     let worktree: Layer;
@@ -958,6 +982,12 @@ function validateStructure(ctx: Context, plan: ParsedPlan): void {
   }
 
   if (status === "draft") return;
+
+  for (const line of plan.lines) {
+    if (!line.fenced && !line.fenceMarker && /^<!-- todo: .* -->\s*$/.test(line.text)) {
+      err(ctx, "PLACEHOLDER", line.no, "a skeleton placeholder is still in the plan; fill the slot or remove the line");
+    }
+  }
 
   const design = section(plan, "Design");
   if (design) {

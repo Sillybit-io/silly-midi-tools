@@ -58,7 +58,7 @@ A `draft` plan needs only the frontmatter, the section headings, Scope, Question
 
 ## Evidence index
 
-One fenced `json` object under `### Evidence index`:
+One fenced `json` object under `### Evidence index`. The heading may hold several fenced `json` blocks instead: the validator merges them (arrays concatenate, nested objects merge one level deep, other later keys replace earlier ones), and a duplicate citation or flow id across blocks is an error. A `planned` or `reviewed` plan may not contain a skeleton placeholder line, `<!-- todo: ... -->` (error `PLACEHOLDER`).
 
 ```json
 {
@@ -193,7 +193,7 @@ A receipt:
 
 | Code | Meaning |
 | --- | --- |
-| FRONTMATTER, SECTION, QUESTIONS, DESIGN | Plan shape |
+| FRONTMATTER, SECTION, QUESTIONS, DESIGN, PLACEHOLDER | Plan shape |
 | REQUIREMENT_ID, GAP_MAP, SUCCESS_MAP | Identifiers and gap mapping |
 | TODO, DEPENDENCY, WAVE, FINAL_WAVE | Todos, dependency graph, waves, and gates |
 | LEGACY_FORMAT, EVIDENCE_INDEX | Missing or malformed Evidence index |

@@ -3,7 +3,7 @@ name: plan-review
 description: Reviews implementation plans against repository evidence and critical end-to-end flows. Records coverage, source traces, probes, and unresolved assumptions before returning OKAY, REJECT, or INCOMPLETE. Checks dependencies, QA, research, questions, diagrams, and execution gates. Rechecks whole-plan readiness after fixes and can run a five-round fix loop. Use when reviewing a plan, checking readiness for implementation, challenging an earlier approval, or asking for the plan-review verdict.
 license: CC-BY-ND-4.0
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
   category: planning
   suggested-model: openai/gpt-6-astra
   suggested-effort: max
